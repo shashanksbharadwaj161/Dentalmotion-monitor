@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New Horizons – IMU Live View</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<script src="/static/three.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:     #080b12;
+  --panel:  #0f1320;
+  --panel2: #171b2a;
+  --border: #1e2438;
+  --text:   #dde3f0;
+  --muted:  #5a6380;
+  --ax: #f87171; --ay: #fb923c; --az: #facc15;
+  --gx: #34d399; --gy: #38bdf8; --gz: #c084fc;
+  --ok: #22c55e; --warn: #f59e0b; --err: #ef4444;
+}
+body { background:var(--bg); color:var(--text); font-family:"Inter",system-ui,sans-serif; font-size:14px; min-height:100vh; display:flex; flex-direction:column; }
+
+/* Header */
+header { display:flex; align-items:center; gap:14px; padding:12px 20px; border-bottom:1px solid var(--border); background:var(--panel); flex-shrink:0; flex-wrap:wrap; }
+header h1 { font-size:16px; font-weight:700; flex:1; letter-spacing:-.02em; }
+.pill { padding:3px 10px; border-radius:99px; font-size:11px; font-weight:600; border:1px solid var(--border); color:var(--muted); background:var(--panel2); }
+.pill.ok   { border-color:var(--ok);   color:var(--ok); }
+.pill.warn { border-color:var(--warn); color:var(--warn); }
+.uid-mono  { font-family:monospace; font-size:12px; color:var(--muted); }
+.port-label { font-size:12px; color:var(--muted); }
+
+/* Stats bar */
+.stats-bar { display:grid; grid-template-columns:repeat(5,1fr); gap:1px; background:var(--border); border-bottom:1px solid var(--border); flex-shrink:0; }
+@media(max-width:700px) { .stats-bar { grid-template-columns:repeat(3,1fr); } }
+.stat-cell { background:var(--panel); padding:10px 16px; }
+.stat-label { font-size:11px; color:var(--muted); letter-spacing:.04em; text-transform:uppercase; margin-bottom:3px; }
+.stat-value { font-size:22px; font-weight:700; font-variant-numeric:tabular-nums; }
+.orient-row { display:flex; gap:10px; align-items:baseline; margin-top:2px; }
+.orient-key { font-size:10px; font-weight:600; color:var(--muted); letter-spacing:.06em; }
+.orient-num { font-size:15px; font-weight:600; font-variant-numeric:tabular-nums; min-width:55px; }
+
+/* Tab bar */
+.tab-bar { display:flex; gap:2px; padding:8px 16px 0; border-bottom:1px solid var(--border); background:var(--panel); flex-shrink:0; }
+.tab-btn { padding:7px 18px; border-radius:7px 7px 0 0; border:1px solid transparent; border-bottom:none; background:transparent; color:var(--muted); cursor:pointer; font-size:13px; font-family:inherit; font-weight:500; transition:color .15s,background .15s; }
+.tab-btn:hover { color:var(--text); background:var(--panel2); }
+.tab-btn.active { color:var(--text); background:var(--bg); border-color:var(--border); margin-bottom:-1px; }
+
+/* Panels */
+.tab-panel { display:none; padding:16px 20px; flex-direction:column; gap:16px; flex:1; }
+.tab-panel.active { display:flex; }
+
+/* Card */
+.card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; }
+.card h2 { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin-bottom:12px; }
+.row2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+@media(max-width:800px) { .row2 { grid-template-columns:1fr; } }
+
+/* 3D canvas */
+.three-wrap { position:relative; border-radius:8px; overflow:hidden; background:#080b12; transition:box-shadow .15s; }
+#three-canvas { display:block; width:100%; height:480px; }
+.three-overlay { position:absolute; bottom:0; left:0; right:0; padding:10px 14px; background:linear-gradient(transparent,rgba(8,11,18,.85)); display:flex; gap:24px; flex-wrap:wrap; }
+.ov-group { display:flex; gap:14px; flex-wrap:wrap; }
+.ov-item { display:flex; align-items:center; gap:5px; font-size:12px; font-family:monospace; }
+.ov-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+.ov-val { min-width:52px; color:var(--text); }
+.ov-unit { color:var(--muted); font-size:10px; }
+
+/* Feature D – paused banner */
+.paused-banner {
+  display:none; position:absolute; top:50%; left:50%;
+  transform:translate(-50%,-50%);
+  background:rgba(8,11,18,.85); border:2px solid var(--warn);
+  color:var(--warn); font-size:22px; font-weight:700; letter-spacing:.1em;
+  padding:14px 32px; border-radius:10px; pointer-events:none; z-index:10;
+}
+.paused-banner.visible { display:block; }
+
+/* Feature E – shock flash */
+.three-wrap.shock-flash { box-shadow:0 0 0 3px var(--err); }
+
+/* Feature F – fullscreen button */
+.btn-fullscreen {
+  position:absolute; top:10px; right:10px; z-index:5;
+  background:rgba(8,11,18,.7); border:1px solid var(--border);
+  color:var(--muted); font-size:16px; padding:4px 8px;
+  border-radius:6px; cursor:pointer; line-height:1;
+}
+.btn-fullscreen:hover { color:var(--text); background:var(--panel2); }
+
+/* Chart */
+.legend { display:flex; gap:14px; margin-bottom:10px; flex-wrap:wrap; align-items:center; }
+.legend-item { display:flex; align-items:center; gap:5px; font-size:12px; color:var(--muted); }
+.ldot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+canvas.chart-canvas { width:100% !important; height:220px !important; display:block; }
+
+/* Controls */
+.controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:4px; }
+button { padding:7px 16px; border-radius:7px; border:1px solid var(--border); background:var(--panel2); color:var(--text); cursor:pointer; font-size:13px; font-family:inherit; font-weight:500; transition:background .15s; }
+button:hover { background:var(--border); }
+button.primary { background:rgba(34,197,94,.12); border-color:var(--ok); color:var(--ok); }
+button.danger  { background:rgba(239,68,68,.12);  border-color:var(--err); color:var(--err); }
+button:disabled { opacity:.35; cursor:not-allowed; }
+#rec-status { font-size:12px; color:var(--muted); }
+#rec-status.active { color:var(--err); }
+
+/* Recordings */
+.rec-dir { font-family:monospace; font-size:11px; color:var(--muted); margin-bottom:12px; word-break:break-all; }
+.rec-table { width:100%; border-collapse:collapse; font-size:13px; }
+.rec-table th { text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+.rec-table td { padding:7px 10px; border-bottom:1px solid var(--border); }
+.rec-table tr:last-child td { border-bottom:none; }
+.rec-table tr:hover td { background:var(--panel2); }
+.rec-name { font-family:monospace; font-size:12px; }
+.rec-size,.rec-time { color:var(--muted); font-size:12px; }
+.no-recs { color:var(--muted); font-size:13px; padding:12px 0; }
+.view-controls { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+.view-controls h2 { margin:0; flex:1; }
+.view-controls button { padding:5px 12px; font-size:12px; }
+
+/* Network tab */
+#net-ssid, #net-password {
+  width:100%; padding:8px 10px; background:var(--panel2); border:1px solid var(--border);
+  border-radius:7px; color:var(--text); font-family:monospace; font-size:13px;
+  transition:border-color .15s, outline .15s;
+}
+#net-ssid:focus, #net-password:focus {
+  outline:2px solid rgba(56,189,248,.5); border-color:var(--gz);
+}
+.net-label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
+.net-field-wrap { display:flex; gap:8px; }
+.net-field-wrap #net-password { flex:1; }
+.net-countdown-box {
+  display:none; margin-top:16px; padding:12px 16px;
+  background:rgba(245,158,11,.08); border:1px solid var(--warn); border-radius:8px;
+}
+.net-guide { font-size:13px; line-height:1.9; padding-left:20px; color:var(--text); }
+.net-guide li { margin-bottom:2px; }
+code.tag { background:var(--panel2); padding:1px 5px; border-radius:4px; font-size:12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>New Horizons OS – IMU Live View</h1>
+  <span class="pill" id="conn-pill">no data</span>
+  <span class="uid-mono" id="uid-badge"></span>
+  <span class="port-label">UDP :{{ udp_port }}</span>
+  <button id="btn-pause" style="padding:5px 13px;font-size:12px">⏸ Pause</button>
+</header>
+
+<div class="stats-bar">
+  <div class="stat-cell">
+    <div class="stat-label">Packets received</div>
+    <div class="stat-value" id="stat-pkts">0</div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-label">IMU samples</div>
+    <div class="stat-value" id="stat-imu">0</div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-label">Sample rate</div>
+    <div class="stat-value" id="stat-hz">— Hz</div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-label">Orientation  P / R / Y</div>
+    <div class="orient-row">
+      <span class="orient-key">P</span><span class="orient-num" id="val-pitch">0.0°</span>
+      <span class="orient-key">R</span><span class="orient-num" id="val-roll">0.0°</span>
+      <span class="orient-key">Y</span><span class="orient-num" id="val-yaw">0.0°</span>
+    </div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-label">Peak |g|</div>
+    <div style="display:flex;align-items:baseline;gap:6px">
+      <div class="stat-value" id="stat-peak-g">0.00</div>
+      <span style="font-size:13px;color:var(--muted)">g</span>
+      <button id="btn-reset-peak" style="padding:2px 7px;font-size:11px;margin-left:4px" title="Reset peak">↺</button>
+    </div>
+    <div style="margin-top:4px;font-size:12px;color:var(--err)">⚡ <span id="stat-shocks">0</span> shocks</div>
+  </div>
+</div>
+
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="3d">3D View</button>
+  <button class="tab-btn" data-tab="charts">Charts</button>
+  <button class="tab-btn" data-tab="recordings">Recordings</button>
+  <button class="tab-btn" data-tab="network">Network</button>
+</div>
+
+<!-- 3D Panel -->
+<div id="panel-3d" class="tab-panel active">
+  <div class="card" style="padding:12px">
+    <div class="view-controls">
+      <h2>Live 3D Orientation</h2>
+      <button id="btn-reset-yaw">Reset Yaw</button>
+    </div>
+    <div class="three-wrap" id="three-wrap">
+      <canvas id="three-canvas"></canvas>
+      <div class="paused-banner" id="paused-banner">⏸ PAUSED</div>
+      <button class="btn-fullscreen" id="btn-fullscreen" title="Fullscreen">⛶</button>
+      <div class="three-overlay">
+        <div class="ov-group">
+          <div class="ov-item"><div class="ov-dot" style="background:var(--ax)"></div><span style="color:var(--muted);margin-right:2px">AX</span><span class="ov-val" id="ov-ax">0.000</span><span class="ov-unit">g</span></div>
+          <div class="ov-item"><div class="ov-dot" style="background:var(--ay)"></div><span style="color:var(--muted);margin-right:2px">AY</span><span class="ov-val" id="ov-ay">0.000</span><span class="ov-unit">g</span></div>
+          <div class="ov-item"><div class="ov-dot" style="background:var(--az)"></div><span style="color:var(--muted);margin-right:2px">AZ</span><span class="ov-val" id="ov-az">0.000</span><span class="ov-unit">g</span></div>
+        </div>
+        <div class="ov-group">
+          <div class="ov-item"><div class="ov-dot" style="background:var(--gx)"></div><span style="color:var(--muted);margin-right:2px">GX</span><span class="ov-val" id="ov-gx">0.00</span><span class="ov-unit">°/s</span></div>
+          <div class="ov-item"><div class="ov-dot" style="background:var(--gy)"></div><span style="color:var(--muted);margin-right:2px">GY</span><span class="ov-val" id="ov-gy">0.00</span><span class="ov-unit">°/s</span></div>
+          <div class="ov-item"><div class="ov-dot" style="background:var(--gz)"></div><span style="color:var(--muted);margin-right:2px">GZ</span><span class="ov-val" id="ov-gz">0.00</span><span class="ov-unit">°/s</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts Panel -->
+<div id="panel-charts" class="tab-panel">
+  <div class="row2">
+    <div class="card">
+      <h2>Accelerometer (g)</h2>
+      <div class="legend">
+        <div class="legend-item"><div class="ldot" style="background:var(--ax)"></div>X</div>
+        <div class="legend-item"><div class="ldot" style="background:var(--ay)"></div>Y</div>
+        <div class="legend-item"><div class="ldot" style="background:var(--az)"></div>Z</div>
+      </div>
+      <canvas id="accel-chart" class="chart-canvas"></canvas>
+    </div>
+    <div class="card">
+      <h2>Gyroscope (°/s)</h2>
+      <div class="legend">
+        <div class="legend-item"><div class="ldot" style="background:var(--gx)"></div>X</div>
+        <div class="legend-item"><div class="ldot" style="background:var(--gy)"></div>Y</div>
+        <div class="legend-item"><div class="ldot" style="background:var(--gz)"></div>Z</div>
+      </div>
+      <canvas id="gyro-chart" class="chart-canvas"></canvas>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Acceleration Magnitude |g|</h2>
+    <div class="legend">
+      <div class="legend-item"><div class="ldot" style="background:#f59e0b"></div>|g|</div>
+      <div class="legend-item" style="gap:5px">
+        <div style="width:18px;height:0;border-top:2px dashed #5a6380;display:inline-block"></div>
+        <span>1g ref</span>
+      </div>
+    </div>
+    <canvas id="mag-chart" class="chart-canvas"></canvas>
+  </div>
+</div>
+
+<!-- Recordings Panel -->
+<div id="panel-recordings" class="tab-panel">
+  <div class="card">
+    <h2>Recording</h2>
+    <div class="controls">
+      <button class="primary" id="btn-start">Start recording</button>
+      <button class="danger"  id="btn-stop" disabled>Stop recording</button>
+      <span id="rec-status">Idle</span>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Saved Files</h2>
+    <div class="rec-dir" id="rec-dir">—</div>
+    <div id="recordings-list">Loading...</div>
+  </div>
+</div>
+
+<!-- Network Panel -->
+<div id="panel-network" class="tab-panel">
+
+  <!-- Card 1: Board status -->
+  <div class="card">
+    <h2>Board Connection Status</h2>
+    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      <div>
+        <div class="stat-label">Board UID</div>
+        <div style="font-family:monospace;font-size:15px;margin-top:3px" id="net-uid">—</div>
+      </div>
+      <div>
+        <div class="stat-label">Mode</div>
+        <span class="pill" id="net-mode-pill">—</span>
+      </div>
+      <div>
+        <div class="stat-label">WiFi RSSI</div>
+        <div style="font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:3px" id="net-rssi">—</div>
+      </div>
+      <div>
+        <div class="stat-label">IMU Stream</div>
+        <span class="pill" id="net-stream-pill">—</span>
+      </div>
+      <div>
+        <div class="stat-label">Board IP</div>
+        <div style="font-family:monospace;font-size:13px;margin-top:3px" id="net-peer">—</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <button id="btn-net-refresh" style="padding:5px 13px;font-size:12px">↻ Refresh</button>
+      <span id="net-status-msg" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+  </div>
+
+  <!-- Card 2: WiFi credentials -->
+  <div class="card">
+    <h2>Change WiFi Credentials</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:14px">
+      Enter the new network name and password, then click Apply. The board will save the credentials
+      and reboot. After it reboots, connect this computer to the new network and click Rediscover below.
+    </p>
+    <div style="display:grid;gap:12px;max-width:480px">
+      <div>
+        <label for="net-ssid" class="net-label">Network Name (SSID)</label>
+        <input id="net-ssid" type="text" autocomplete="off" autocorrect="off"
+               autocapitalize="off" spellcheck="false" placeholder="HospitalWifi_5G">
+      </div>
+      <div>
+        <label for="net-password" class="net-label">Password (leave blank for open networks)</label>
+        <div class="net-field-wrap">
+          <input id="net-password" type="password" autocomplete="new-password"
+                 autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="••••••••">
+          <button id="btn-net-show-pw" type="button" title="Show / hide password"
+                  style="padding:6px 12px;font-size:14px;flex-shrink:0">👁</button>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button id="btn-net-apply" class="primary">Apply &amp; Reboot Board</button>
+      <span id="net-wifi-msg" style="font-size:12px"></span>
+    </div>
+    <div class="net-countdown-box" id="net-countdown-wrap">
+      <div style="font-size:14px;font-weight:600;color:var(--warn)">Board rebooting…</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:4px">
+        Reconnect this computer to the new network, then click <strong style="color:var(--text)">Rediscover</strong> below.
+      </div>
+      <div style="font-size:32px;font-weight:700;color:var(--warn);margin-top:8px;font-variant-numeric:tabular-nums" id="net-countdown">15</div>
+    </div>
+  </div>
+
+  <!-- Card 3: Rediscover -->
+  <div class="card">
+    <h2>Reconnect Board</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:14px">
+      After the board reconnects to the new network, trigger rediscovery so this gateway can find it again.
+      Sends a FindMe probe, waits 5 seconds, then re-establishes the data stream.
+    </p>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button id="btn-net-rediscover">Rediscover Board</button>
+      <span id="net-rediscover-msg" style="font-size:12px"></span>
+    </div>
+    <div id="net-rediscover-progress"
+         style="display:none;margin-top:10px;font-size:13px;color:var(--muted)">
+      Sending FindMe probe… waiting for board… establishing stream…
+    </div>
+  </div>
+
+  <!-- Card 4: AP Setup Mode guide -->
+  <div class="card" style="border-color:rgba(239,68,68,.35)">
+    <h2 style="color:var(--err)">Board Unreachable? Use AP Setup Mode</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:12px">
+      If the board cannot connect to WiFi at all (wrong password, network unavailable),
+      use the hardware AP setup mode to configure it directly from any device.
+    </p>
+    <ol class="net-guide">
+      <li>Power off the board completely.</li>
+      <li>Hold the <strong>BOOT button (GPIO 46)</strong> and power it back on.</li>
+      <li>Keep holding BOOT for about 3 seconds after power-on, then release.</li>
+      <li>The board creates a WiFi access point named <code class="tag">NHOS-Setup-3CDC75</code> (no password).</li>
+      <li>Connect this computer or a phone to that access point.</li>
+      <li>Open a browser and go to <code class="tag">http://192.168.4.1</code></li>
+      <li>Enter the new WiFi SSID and password and save.</li>
+      <li>Board reboots and connects to the new network. Return here and click <strong>Rediscover</strong>.</li>
+    </ol>
+    <p style="font-size:12px;color:var(--muted);margin-top:10px">
+      The setup page is served by the board firmware — not by this viewer.
+    </p>
+  </div>
+
+</div>
+
+<script>
+'use strict';
+
+// ── New feature state ────────────────────────────────────────────────
+var peakG           = 0;
+var netCountdownTimer = null;
+var netCountdownSec   = 0;
+var netPwVisible      = false;
+var isPaused        = false;
+var pollInterval    = null;
+var shockCount      = 0;
+var SHOCK_THRESHOLD_G = 2.5;
+var shockFlashTimer = null;
+var gravityArrow    = null;
+var _gvecScratch    = null;   // pre-allocated; set after THREE loads
+
+// ── Tab switching ───────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+    document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
+    btn.classList.add('active');
+    document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'recordings') loadRecordings();
+    if (btn.dataset.tab === '3d' && typeof doResizeThree === 'function') doResizeThree();
+  });
+});
+
+// ── Three.js 3D View ────────────────────────────────────────────────
+var pivot3d = null;
+var doResizeThree = function() {};
+var threeRenderer = null;
+
+(function initThree() {
+  if (typeof THREE === 'undefined') {
+    console.warn('Three.js not loaded');
+    return;
+  }
+  try {
+    var canvas = document.getElementById('three-canvas');
+    var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    var scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x080b12);
+    scene.fog = new THREE.Fog(0x080b12, 14, 24);
+
+    var camera = new THREE.PerspectiveCamera(38, 2, 0.1, 100);
+    camera.position.set(3.2, 2.2, 3.2);
+    camera.lookAt(0, 0.1, 0);
+
+    scene.add(new THREE.AmbientLight(0x8899cc, 0.7));
+    var sun = new THREE.DirectionalLight(0xffffff, 1.8);
+    sun.position.set(4, 7, 4);
+    scene.add(sun);
+    var fill = new THREE.DirectionalLight(0x4466aa, 0.5);
+    fill.position.set(-3, 2, -4);
+    scene.add(fill);
+
+    var grid = new THREE.GridHelper(6, 12, 0x1e2438, 0x141824);
+    grid.position.y = -1.0;
+    scene.add(grid);
+
+    // Pivot – rotates with sensor
+    pivot3d = new THREE.Group();
+    scene.add(pivot3d);
+
+    // PCB board
+    var boardMats = [
+      new THREE.MeshPhongMaterial({ color: 0xc0392b }),
+      new THREE.MeshPhongMaterial({ color: 0x7b241c }),
+      new THREE.MeshPhongMaterial({ color: 0x1a5c2a }),
+      new THREE.MeshPhongMaterial({ color: 0x0d3317 }),
+      new THREE.MeshPhongMaterial({ color: 0x1565a0 }),
+      new THREE.MeshPhongMaterial({ color: 0x0d3d63 }),
+    ];
+    pivot3d.add(new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.1, 1.1), boardMats));
+
+    // Chip
+    var chip = new THREE.Mesh(
+      new THREE.BoxGeometry(0.28, 0.06, 0.28),
+      new THREE.MeshPhongMaterial({ color: 0x222222, specular: 0x555555, shininess: 80 })
+    );
+    chip.position.set(0, 0.08, 0);
+    pivot3d.add(chip);
+
+    // Axis arrows
+    function arrow(dir, color) {
+      var g = new THREE.Group();
+      var shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.025, 0.025, 1.1, 8),
+        new THREE.MeshPhongMaterial({ color: color })
+      );
+      shaft.position.y = 0.55;
+      var cone = new THREE.Mesh(
+        new THREE.ConeGeometry(0.07, 0.2, 8),
+        new THREE.MeshPhongMaterial({ color: color })
+      );
+      cone.position.y = 1.2;
+      g.add(shaft); g.add(cone);
+      if (dir === 'x') g.rotation.z = -Math.PI / 2;
+      if (dir === 'z') g.rotation.x =  Math.PI / 2;
+      return g;
+    }
+    pivot3d.add(arrow('x', 0xff4444));
+    pivot3d.add(arrow('y', 0x44ff88));
+    pivot3d.add(arrow('z', 0x44aaff));
+
+    // Feature B – gravity vector arrow (gold, parented to pivot3d)
+    _gvecScratch = new THREE.Vector3();
+    gravityArrow = new THREE.ArrowHelper(
+      new THREE.Vector3(0, -1, 0),
+      new THREE.Vector3(0, 0, 0),
+      1.6, 0xf59e0b, 0.3, 0.15
+    );
+    pivot3d.add(gravityArrow);
+
+    doResizeThree = function() {
+      var w = canvas.clientWidth;
+      var h = canvas.clientHeight;
+      if (renderer.domElement.width !== w || renderer.domElement.height !== h) {
+        renderer.setSize(w, h, false);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+      }
+    };
+    doResizeThree();
+    window.addEventListener('resize', doResizeThree);
+    threeRenderer = renderer;
+
+    function renderLoop() {
+      requestAnimationFrame(renderLoop);
+      doResizeThree();
+      renderer.render(scene, camera);
+    }
+    renderLoop();
+
+  } catch(e) {
+    console.error('Three.js init failed:', e);
+    pivot3d = null;
+  }
+})();
+
+// ── Orientation filter ──────────────────────────────────────────────
+var ofPitch = 0, ofRoll = 0, ofYaw = 0, ofLastT = null;
+var ALPHA = 0.97;
+
+document.getElementById('btn-reset-yaw').addEventListener('click', function() { ofYaw = 0; });
+
+function applyOrientation(s) {
+  // Feature A + E – magnitude, peak, shock
+  var mag = Math.sqrt(s.ax*s.ax + s.ay*s.ay + s.az*s.az);
+  if (mag > peakG) {
+    peakG = mag;
+    document.getElementById('stat-peak-g').textContent = peakG.toFixed(2);
+  }
+  if (mag > SHOCK_THRESHOLD_G) {
+    shockCount++;
+    document.getElementById('stat-shocks').textContent = shockCount;
+    var wrap = document.getElementById('three-wrap');
+    if (wrap) {
+      wrap.classList.add('shock-flash');
+      if (shockFlashTimer) clearTimeout(shockFlashTimer);
+      shockFlashTimer = setTimeout(function() { wrap.classList.remove('shock-flash'); }, 300);
+    }
+  }
+
+  // Feature B – update gravity arrow direction
+  if (gravityArrow && _gvecScratch) {
+    _gvecScratch.set(s.ax, s.ay, s.az);
+    var glen = _gvecScratch.length();
+    if (glen > 0.05) {
+      _gvecScratch.divideScalar(glen);
+      gravityArrow.setDirection(_gvecScratch);
+      gravityArrow.setLength(Math.min(glen * 1.6, 2.5), 0.3, 0.15);
+    }
+  }
+
+  var dt = ofLastT !== null ? Math.min(s.t - ofLastT, 0.05) : 0.01;
+  ofLastT = s.t;
+
+  var norm = Math.sqrt(s.ax*s.ax + s.ay*s.ay + s.az*s.az);
+  if (norm > 0.1) {
+    var nx = s.ax/norm, ny = s.ay/norm, nz = s.az/norm;
+    var ap = Math.atan2(-nx, Math.sqrt(ny*ny + nz*nz));
+    var ar = Math.atan2(ny, nz);
+    ofPitch = ALPHA*(ofPitch + s.gx*Math.PI/180*dt) + (1-ALPHA)*ap;
+    ofRoll  = ALPHA*(ofRoll  + s.gy*Math.PI/180*dt) + (1-ALPHA)*ar;
+    ofYaw  += s.gz*Math.PI/180*dt;
+  }
+
+  if (pivot3d) pivot3d.rotation.set(ofPitch, ofYaw, ofRoll);
+
+  function deg(r) { return (r*180/Math.PI).toFixed(1)+'°'; }
+  document.getElementById('val-pitch').textContent = deg(ofPitch);
+  document.getElementById('val-roll').textContent  = deg(ofRoll);
+  document.getElementById('val-yaw').textContent   = deg(ofYaw);
+
+  document.getElementById('ov-ax').textContent = s.ax.toFixed(3);
+  document.getElementById('ov-ay').textContent = s.ay.toFixed(3);
+  document.getElementById('ov-az').textContent = s.az.toFixed(3);
+  document.getElementById('ov-gx').textContent = s.gx.toFixed(2);
+  document.getElementById('ov-gy').textContent = s.gy.toFixed(2);
+  document.getElementById('ov-gz').textContent = s.gz.toFixed(2);
+}
+
+// ── Chart.js ────────────────────────────────────────────────────────
+function cssVar(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+var C = { ax:cssVar('--ax'), ay:cssVar('--ay'), az:cssVar('--az'),
+          gx:cssVar('--gx'), gy:cssVar('--gy'), gz:cssVar('--gz') };
+
+function makeChart(id, lbls, cols) {
+  return new Chart(document.getElementById(id).getContext('2d'), {
+    type: 'line',
+    data: { datasets: lbls.map(function(l,i) { return {
+      label:l, data:[], borderColor:cols[i], backgroundColor:cols[i]+'18',
+      borderWidth:1.5, pointRadius:0, tension:0.15
+    }; }) },
+    options: {
+      animation:false, responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{ legend:{ display:false } },
+      scales:{
+        x:{ type:'linear', ticks:{ color:'#5a6380', maxTicksLimit:7,
+            callback:function(v){ return (v/1000).toFixed(1)+'s'; } }, grid:{ color:'#1e2438' } },
+        y:{ ticks:{ color:'#5a6380' }, grid:{ color:'#1e2438' } }
+      }
+    }
+  });
+}
+
+var accelChart = makeChart('accel-chart', ['ax','ay','az'], [C.ax,C.ay,C.az]);
+var gyroChart  = makeChart('gyro-chart',  ['gx','gy','gz'], [C.gx,C.gy,C.gz]);
+
+// Feature C – magnitude chart
+var magChart = new Chart(document.getElementById('mag-chart').getContext('2d'), {
+  type: 'line',
+  data: {
+    datasets: [
+      {
+        label: '|g|',
+        data: [],
+        borderColor: '#f59e0b',
+        backgroundColor: '#f59e0b18',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.15
+      },
+      {
+        label: '1g ref',
+        data: [],
+        borderColor: '#5a6380',
+        borderWidth: 1,
+        borderDash: [6, 4],
+        pointRadius: 0,
+        tension: 0
+      }
+    ]
+  },
+  options: {
+    animation: false, responsive: true, maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { type: 'linear', ticks: { color: '#5a6380', maxTicksLimit: 7,
+           callback: function(v) { return (v/1000).toFixed(1)+'s'; } }, grid: { color: '#1e2438' } },
+      y: { min: 0, ticks: { color: '#5a6380' }, grid: { color: '#1e2438' } }
+    }
+  }
+});
+
+function pushChart(chart, win, keys) {
+  var t0 = win[0].ts_ms;
+  chart.data.datasets.forEach(function(ds,i) {
+    ds.data = win.map(function(s) { return { x: s.ts_ms - t0, y: s[keys[i]] }; });
+  });
+  chart.update('none');
+}
+
+function pushMagChart(win) {
+  var t0   = win[0].ts_ms;
+  var tEnd = win[win.length - 1].ts_ms - t0;
+  magChart.data.datasets[0].data = win.map(function(s) {
+    return { x: s.ts_ms - t0, y: Math.sqrt(s.ax*s.ax + s.ay*s.ay + s.az*s.az) };
+  });
+  magChart.data.datasets[1].data = [{ x: 0, y: 1.0 }, { x: tEnd, y: 1.0 }];
+  magChart.update('none');
+}
+
+// ── Polling ─────────────────────────────────────────────────────────
+var POLL_MS   = 50;
+var DISP_WIN  = 12;
+var pollLastT = 0;
+var hzBucket  = [];
+
+async function poll() {
+  try {
+    var res = await fetch('/api/latest?since=' + pollLastT + '&limit=300');
+    var data = await res.json();
+    var samples = data.samples;
+    var stats   = data.stats;
+
+    if (samples.length > 0) {
+      pollLastT = samples[samples.length - 1].t;
+      hzBucket.push({ t: Date.now(), n: samples.length });
+      applyOrientation(samples[samples.length - 1]);
+    }
+
+    var now = Date.now();
+    hzBucket = hzBucket.filter(function(x) { return now - x.t < 2000; });
+    var totalN = hzBucket.reduce(function(a,x) { return a+x.n; }, 0);
+    var hz = hzBucket.length ? Math.round(totalN / 2) : 0;
+
+    var pill = document.getElementById('conn-pill');
+    var age  = now - stats.last_rx_ms;
+    if (!stats.last_rx_ms)  { pill.textContent='no data'; pill.className='pill'; }
+    else if (age < 3000)    { pill.textContent='live';    pill.className='pill ok'; }
+    else                    { pill.textContent='stale';   pill.className='pill warn'; }
+    if (stats.last_uid) document.getElementById('uid-badge').textContent = stats.last_uid;
+
+    document.getElementById('stat-pkts').textContent = stats.packets_received.toLocaleString();
+    document.getElementById('stat-imu').textContent  = stats.imu_samples.toLocaleString();
+    document.getElementById('stat-hz').textContent   = hz ? hz+' Hz' : '— Hz';
+
+    // Update charts only when tab is visible
+    if (document.getElementById('panel-charts').classList.contains('active')) {
+      var res2   = await fetch('/api/latest?limit=' + (DISP_WIN * 120));
+      var data2  = await res2.json();
+      var win    = data2.samples;
+      if (win.length > 1) {
+        pushChart(accelChart, win, ['ax','ay','az']);
+        pushChart(gyroChart,  win, ['gx','gy','gz']);
+        pushMagChart(win);
+      }
+    }
+  } catch(e) {
+    // network blip – ignore
+  }
+}
+
+// Feature D – start/stop polling helpers
+function startPolling() {
+  if (pollInterval) return;
+  pollInterval = setInterval(poll, POLL_MS);
+  poll();
+}
+
+function stopPolling() {
+  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+}
+
+startPolling();
+
+// ── Event listeners (new features) ──────────────────────────────────
+
+// Feature A – reset peak-g
+document.getElementById('btn-reset-peak').addEventListener('click', function() {
+  peakG = 0;
+  document.getElementById('stat-peak-g').textContent = '0.00';
+});
+
+// Feature D – pause/resume
+document.getElementById('btn-pause').addEventListener('click', function() {
+  isPaused = !isPaused;
+  var btn    = document.getElementById('btn-pause');
+  var banner = document.getElementById('paused-banner');
+  if (isPaused) {
+    stopPolling();
+    btn.textContent = '▶ Resume';
+    if (banner) banner.classList.add('visible');
+  } else {
+    startPolling();
+    btn.textContent = '⏸ Pause';
+    if (banner) banner.classList.remove('visible');
+  }
+});
+
+// Feature F – fullscreen
+document.getElementById('btn-fullscreen').addEventListener('click', function() {
+  var wrap = document.getElementById('three-wrap');
+  if (!wrap) return;
+  var req = wrap.requestFullscreen
+         || wrap.webkitRequestFullscreen
+         || wrap.mozRequestFullScreen
+         || wrap.msRequestFullscreen;
+  if (req) {
+    req.call(wrap).catch(function(e) { console.warn('Fullscreen:', e); });
+  }
+});
+
+// ── Recording controls ──────────────────────────────────────────────
+var btnStart  = document.getElementById('btn-start');
+var btnStop   = document.getElementById('btn-stop');
+var recStatus = document.getElementById('rec-status');
+
+btnStart.addEventListener('click', async function() {
+  btnStart.disabled = true;
+  var d = await (await fetch('/api/record/start', { method:'POST' })).json();
+  if (d.ok) {
+    btnStop.disabled = false;
+    recStatus.textContent = '● Recording → ' + d.path.split(/[\\/]/).pop();
+    recStatus.className = 'active';
+  } else {
+    btnStart.disabled = false;
+    recStatus.textContent = 'Error: ' + d.error;
+  }
+});
+
+btnStop.addEventListener('click', async function() {
+  btnStop.disabled = true;
+  var d = await (await fetch('/api/record/stop', { method:'POST' })).json();
+  btnStart.disabled = false;
+  recStatus.textContent = d.ok
+    ? 'Saved ' + d.rows.toLocaleString() + ' rows → ' + d.path.split(/[\\/]/).pop()
+    : 'Error: ' + d.error;
+  recStatus.className = '';
+  loadRecordings();
+});
+
+// ── Network tab ─────────────────────────────────────────────────────
+function netSetPill(el, text, cls) {
+  el.textContent = text;
+  el.className = 'pill' + (cls ? ' ' + cls : '');
+}
+
+async function netRefreshStatus() {
+  var msgEl = document.getElementById('net-status-msg');
+  msgEl.textContent = 'Refreshing…';
+  msgEl.style.color = 'var(--muted)';
+  try {
+    var res = await fetch('/api/net/status');
+    var d   = await res.json();
+
+    if (!d.ok && d.error === 'gateway_unreachable') {
+      document.getElementById('net-uid').textContent = '—';
+      netSetPill(document.getElementById('net-mode-pill'), 'gateway offline', 'err');
+      document.getElementById('net-rssi').textContent = '—';
+      netSetPill(document.getElementById('net-stream-pill'), '—', '');
+      document.getElementById('net-peer').textContent = '—';
+      msgEl.textContent = 'Cannot reach gateway — is it running on port 5052?';
+      msgEl.style.color = 'var(--err)';
+      return;
+    }
+    if (!d.ok && d.error === 'device_not_found') {
+      document.getElementById('net-uid').textContent = '3CDC75413DC8';
+      netSetPill(document.getElementById('net-mode-pill'), 'not found', 'warn');
+      document.getElementById('net-rssi').textContent = '—';
+      netSetPill(document.getElementById('net-stream-pill'),
+        d.viewer_live ? 'live (stale)' : 'no data', d.viewer_live ? 'warn' : '');
+      document.getElementById('net-peer').textContent = '—';
+      msgEl.textContent = 'Board not claimed by gateway. Try Rediscover.';
+      msgEl.style.color = 'var(--warn)';
+      return;
+    }
+
+    document.getElementById('net-uid').textContent = d.uid || '—';
+    var modeCls = d.mode === 'normal' || d.mode === 'serving' ? 'ok' : d.mode ? 'warn' : '';
+    netSetPill(document.getElementById('net-mode-pill'), d.mode || '—', modeCls);
+    document.getElementById('net-rssi').textContent = d.wifi_rssi != null ? d.wifi_rssi + ' dBm' : '—';
+    netSetPill(document.getElementById('net-stream-pill'),
+      d.viewer_live ? 'live' : 'no data', d.viewer_live ? 'ok' : 'warn');
+    document.getElementById('net-peer').textContent = d.peer || '—';
+    msgEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    msgEl.style.color = 'var(--muted)';
+  } catch(e) {
+    msgEl.textContent = 'Error: ' + e.message;
+    msgEl.style.color = 'var(--err)';
+  }
+}
+
+function netStartCountdown(seconds) {
+  if (netCountdownTimer) { clearInterval(netCountdownTimer); netCountdownTimer = null; }
+  netCountdownSec = seconds;
+  var el = document.getElementById('net-countdown');
+  el.textContent = netCountdownSec;
+  document.getElementById('net-countdown-wrap').style.display = 'block';
+  netCountdownTimer = setInterval(function() {
+    netCountdownSec--;
+    el.textContent = netCountdownSec > 0 ? netCountdownSec : '0';
+    if (netCountdownSec <= 0) { clearInterval(netCountdownTimer); netCountdownTimer = null; }
+  }, 1000);
+}
+
+document.getElementById('btn-net-show-pw').addEventListener('click', function() {
+  netPwVisible = !netPwVisible;
+  document.getElementById('net-password').type = netPwVisible ? 'text' : 'password';
+  this.textContent = netPwVisible ? '🙈' : '👁';
+});
+
+document.getElementById('btn-net-apply').addEventListener('click', async function() {
+  var ssid     = document.getElementById('net-ssid').value.trim();
+  var password = document.getElementById('net-password').value;
+  var msgEl    = document.getElementById('net-wifi-msg');
+
+  if (!ssid) {
+    msgEl.textContent = 'Network name (SSID) is required.';
+    msgEl.style.color = 'var(--err)';
+    return;
+  }
+
+  var btn = this;
+  btn.disabled = true; btn.textContent = 'Applying…';
+  msgEl.textContent = 'Sending credentials to board…';
+  msgEl.style.color = 'var(--muted)';
+  document.getElementById('net-countdown-wrap').style.display = 'none';
+  if (netCountdownTimer) { clearInterval(netCountdownTimer); netCountdownTimer = null; }
+
+  try {
+    var res = await fetch('/api/net/wifi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ssid: ssid, password: password })
+    });
+    var d = await res.json();
+
+    if (d.ok) {
+      msgEl.textContent = 'Credentials saved. Board is rebooting…';
+      msgEl.style.color = 'var(--ok)';
+      document.getElementById('net-password').value = '';
+      if (netPwVisible) {
+        netPwVisible = false;
+        document.getElementById('net-password').type = 'password';
+        document.getElementById('btn-net-show-pw').textContent = '👁';
+      }
+      netStartCountdown(15);
+    } else {
+      var errMap = {
+        'gateway_unreachable': 'Cannot reach gateway. Is it running?',
+        'device_unreachable':  'Board not reachable via gateway. Is it powered on and connected?',
+        'set_wifi_failed':     'Board rejected the command. Check the board is in serving mode.',
+        'reboot_failed':       'Credentials saved but reboot failed. Reboot the board manually.'
+      };
+      msgEl.textContent = errMap[d.error] || ('Failed: ' + (d.error || 'unknown error'));
+      msgEl.style.color = 'var(--err)';
+    }
+  } catch(e) {
+    msgEl.textContent = 'Request failed: ' + e.message;
+    msgEl.style.color = 'var(--err)';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Apply & Reboot Board';
+  }
+});
+
+document.getElementById('btn-net-rediscover').addEventListener('click', async function() {
+  var btn    = this;
+  var msgEl  = document.getElementById('net-rediscover-msg');
+  var progEl = document.getElementById('net-rediscover-progress');
+
+  btn.disabled = true; btn.textContent = 'Rediscovering…';
+  msgEl.textContent = ''; msgEl.style.color = '';
+  progEl.style.display = 'block';
+
+  try {
+    var res = await fetch('/api/net/rediscover', { method: 'POST' });
+    var d   = await res.json();
+    progEl.style.display = 'none';
+
+    if (d.ok) {
+      msgEl.textContent = 'Board found and stream re-established.';
+      msgEl.style.color = 'var(--ok)';
+      setTimeout(netRefreshStatus, 1500);
+    } else {
+      var errMsg = 'Rediscovery failed.';
+      if ((d.serve || {}).error === 'device_unreachable') {
+        errMsg = 'Board not yet visible on network. Wait a few seconds and try again.';
+      } else if ((d.serve || {}).error === 'upstream_offline') {
+        errMsg = 'Gateway not connected to upstream server. Check gateway settings.';
+      } else if (d.error === 'gateway_unreachable') {
+        errMsg = 'Cannot reach gateway.';
+      }
+      msgEl.textContent = errMsg;
+      msgEl.style.color = 'var(--err)';
+    }
+  } catch(e) {
+    progEl.style.display = 'none';
+    msgEl.textContent = 'Error: ' + e.message;
+    msgEl.style.color = 'var(--err)';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Rediscover Board';
+  }
+});
+
+document.getElementById('btn-net-refresh').addEventListener('click', netRefreshStatus);
+
+document.querySelector('[data-tab="network"]').addEventListener('click', function() {
+  netRefreshStatus();
+});
+
+// ── Recordings list ─────────────────────────────────────────────────
+async function loadRecordings() {
+  try {
+    var d = await (await fetch('/api/recordings')).json();
+    document.getElementById('rec-dir').textContent = '📁 ' + d.dir;
+    var el = document.getElementById('recordings-list');
+    if (!d.recordings.length) {
+      el.innerHTML = '<p class="no-recs">No recordings yet. Press Start recording to begin.</p>';
+      return;
+    }
+    var rows = d.recordings.map(function(r) {
+      return '<tr><td class="rec-name">'+r.name+'</td><td class="rec-size">'+r.size_kb+' KB</td><td class="rec-time">'+r.modified+'</td></tr>';
+    }).join('');
+    el.innerHTML = '<table class="rec-table"><thead><tr><th>File</th><th>Size</th><th>Saved</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  } catch(e) {}
+}
+</script>
+</body>
+</html>

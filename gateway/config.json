@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "gateway_name": "New Horizons Gateway",
+  "gateway_id": "nh-gateway-cnlab01",
+  "target_mode": "production",
+  "manual_url": "",
+  "server_url": "wss://isensing-s1.u-aizu.ac.jp/newhorizons/gateway/ws",
+  "listen_udp_host": "0.0.0.0",
+  "listen_udp_port": 13250,
+  "listen_discovery_host": "0.0.0.0",
+  "listen_discovery_port": 22346,
+  "listen_web_host": "0.0.0.0",
+  "listen_web_port": 5052,
+  "discovery_enabled": true,
+  "discovery_priority": 100,
+  "denied_devices": [],
+  "local_mirror_udp_port": 13253
+}
