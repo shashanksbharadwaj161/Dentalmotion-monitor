@@ -7,13 +7,23 @@ logic. It speaks the exact same UDP wire protocol as the old New Horizons OS
 firmware, so it's a drop-in replacement: `gateway/` and `imu_viewer/` need no
 changes.
 
+Verified to compile clean (0 warnings/errors) against `esp32:esp32` core 2.0.9
+with `Arduino_BMI270_BMM150` 1.2.3 and `ArduinoJson` 6.21.5 — 758233 bytes
+(22%) flash, 46472 bytes (14%) RAM.
+
 ## Build
 
 ```
-arduino-cli lib install "Arduino_BMI270_BMM150" "ArduinoJson"
+arduino-cli lib install "Arduino_BMI270_BMM150" "ArduinoJson@6.21.5"
 arduino-cli compile --fqbn esp32:esp32:esp32s3:FlashSize=8M,PartitionScheme=default_8MB \
   --build-path build firmware/dentalmotion_board --output-dir out
 ```
+
+> Pin `ArduinoJson` to the 6.x line. ArduinoJson 7 needs a newer C++ standard
+> than the esp32 core 2.0.9 toolchain defaults to (`gnu++11`) and will fail
+> to compile with confusing, mis-located parser errors. If you're on a newer
+> esp32 core (3.x, which defaults to a newer C++ standard) ArduinoJson 7
+> should be fine too — just verify with a clean build either way.
 
 ## Flash
 

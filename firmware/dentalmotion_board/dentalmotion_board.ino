@@ -66,6 +66,27 @@ unsigned long lastHeartbeatMs = 0;
 unsigned long lastFindmeMs = 0;
 
 // ---------------------------------------------------------------------------
+// Forward declarations (explicit, rather than relying on the Arduino IDE's
+// ctags-based auto-prototype step, which chokes on some of these signatures)
+// ---------------------------------------------------------------------------
+void computeUid();
+IPAddress broadcastAddressForCurrentSubnet();
+void handlePortalRoot();
+void handlePortalSave();
+void handlePortalRedirect();
+void startSetupAp();
+void sendFindmeDiscover(const char* currentGatewayId);
+void serviceFindme();
+void writeHeader(uint8_t* out, uint8_t flags, uint16_t payloadLen);
+void sendImuPacket(float ax, float ay, float az, float gx, float gy, float gz);
+void sendHeartbeatPacket();
+void sendControlFrame(JsonDocument& doc, IPAddress destIp, uint16_t destPort);
+void handleCommand(const char* command, JsonVariantConst payload, const char* requestId,
+                    IPAddress destIp, uint16_t destPort);
+void serviceControl();
+bool connectToStoredWifi();
+
+// ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
 void computeUid() {
@@ -175,7 +196,7 @@ void startSetupAp() {
 // ---------------------------------------------------------------------------
 // FindMe discovery (UDP broadcast, port 22346)
 // ---------------------------------------------------------------------------
-void sendFindmeDiscover(const char* currentGatewayId = nullptr) {
+void sendFindmeDiscover(const char* currentGatewayId) {
   StaticJsonDocument<384> doc;
   doc["type"] = "findme_discover";
   doc["device_uid"] = uidHex;
@@ -206,7 +227,7 @@ void sendFindmeDiscover(const char* currentGatewayId = nullptr) {
 void serviceFindme() {
   if (!attached && millis() - lastFindmeMs >= FINDME_INTERVAL_MS) {
     lastFindmeMs = millis();
-    sendFindmeDiscover();
+    sendFindmeDiscover(nullptr);
   }
 
   int packetSize = findmeUdp.parsePacket();
