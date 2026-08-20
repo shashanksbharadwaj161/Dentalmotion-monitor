@@ -28,7 +28,7 @@ The dashboard shows the movement live and records it for later analysis.
 
 | Item | Details |
 |------|---------|
-| **Sensor Glove** | New Horizons OS board (pre-assembled, worn on the hand) |
+| **Sensor Glove** | DentalMotion Monitor board (pre-assembled, worn on the hand) |
 | **Windows Laptop / PC** | Windows 10 or Windows 11 |
 | **WiFi Network** | The laptop and the glove must be on the **same WiFi network** |
 | **Browser** | Any browser (Chrome, Edge, Firefox) |
@@ -122,7 +122,7 @@ When the dashboard opens, it may show "no data" for a moment.
 The file is automatically saved to your Desktop in a folder called **DentalMotion\_Recordings**.
 
 **File naming:** `imu_[device-id]_[date]_[time].csv`
-Example: `imu_3CDC75413DC8_20260703_142500.csv`
+Example: `imu_3CDC75413DE8_20260703_142500.csv`
 
 **Opening in Excel:** Just double-click the file — Excel opens it automatically.
 Each row = one sensor reading (~100 readings per second).
@@ -211,8 +211,8 @@ You will need: **any phone, tablet, or laptop with WiFi**
 2. **Hold the BOOT button** — a small button on the sensor board labeled BOOT
 3. While holding BOOT, **power the glove back on**
 4. Keep holding BOOT for **3 seconds** after it powers on, then release
-5. The glove creates a temporary WiFi network named **`NHOS-Setup-3CDC75`** (no password)
-6. On your phone or another laptop, **connect to `NHOS-Setup-3CDC75`**
+5. The glove creates a temporary WiFi network named **`DentalMotion-Setup-3CDC75`** (no password)
+6. On your phone or another laptop, **connect to `DentalMotion-Setup-3CDC75`**
 7. Open a browser and go to: **http://192.168.4.1**
 8. A setup page appears — type the new WiFi name and password, then click Save
 9. The glove restarts and joins the new network
@@ -252,21 +252,21 @@ You will need: **any phone, tablet, or laptop with WiFi**
 [Sensor Glove]
   UDP port 13250 ──► [Gateway  :5052]  ──mirror──►  [IMU Viewer :8765]
   UDP port 22346 ──► (FindMe discovery)
-                           │
-                    WebSocket upstream:
-              wss://isensing-s1.u-aizu.ac.jp
 ```
+
+Everything is local — the gateway does not talk to any external server.
+Both processes run only on this laptop, on this LAN.
 
 - **Gateway** listens: UDP 13250 (sensor data), UDP 22346 (FindMe), TCP 5052 (REST API)
 - **IMU Viewer** listens: UDP 13253 (mirrored data), TCP 8765 (web dashboard)
 - Both processes must run simultaneously
 - WiFi credentials are changed via UDP command relay: `POST /api/devices/<uid>/cmd` → `{"command":"set_wifi", "ssid":"...", "password":"..."}`
 - Board reboots automatically 1 second after credentials are applied
-- Default device UID: `3CDC75413DC8` — override with env var `NHOS_DEVICE_UID`
+- Default device UID: `3CDC75413DE8` — override with env var `DENTALMOTION_DEVICE_UID`
 - Recordings saved to: `%USERPROFILE%\Desktop\DentalMotion_Recordings\`
 
 Sensor spec: BMI270 IMU — accelerometer ±8g / 100 Hz, gyroscope ±2000 °/s / 100 Hz
 
 ---
 
-*DentalMotion Monitor — Built on New Horizons OS v0.10.1 — VD-CTL/R v1.0.F 2026.4*
+*DentalMotion Monitor — Built on DentalMotion Monitor v0.10.1 — DentalMotion-ESP32S3 v1.0*

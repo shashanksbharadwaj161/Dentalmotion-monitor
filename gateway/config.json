@@ -1,10 +1,7 @@
 {
   "enabled": true,
-  "gateway_name": "New Horizons Gateway",
-  "gateway_id": "nh-gateway-cnlab01",
-  "target_mode": "production",
-  "manual_url": "",
-  "server_url": "wss://isensing-s1.u-aizu.ac.jp/newhorizons/gateway/ws",
+  "gateway_name": "DentalMotion Gateway",
+  "gateway_id": "dentalmotion-gateway-01",
   "listen_udp_host": "0.0.0.0",
   "listen_udp_port": 13250,
   "listen_discovery_host": "0.0.0.0",

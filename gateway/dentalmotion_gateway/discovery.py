@@ -20,7 +20,7 @@ class DiscoveryResponder:
         gateway_id: str,
         udp_port: Callable[[], int] | int,
         priority: int = 100,
-        gateway_name: str = "New Horizons Gateway",
+        gateway_name: str = "DentalMotion Gateway",
         upstream_status: Callable[[], str] | None = None,
         is_denied: Callable[[str], bool] | None = None,
         active_claim: Callable[[str], dict | None] | None = None,
@@ -54,7 +54,7 @@ class DiscoveryResponder:
         self._sock = sock
         self._stop.clear()
         self.started = True
-        self._thread = threading.Thread(target=self._run, name="newhorizons-gateway-discovery", daemon=True)
+        self._thread = threading.Thread(target=self._run, name="dentalmotion-gateway-discovery", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:

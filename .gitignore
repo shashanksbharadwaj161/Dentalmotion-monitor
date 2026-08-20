@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.run/
+build/
+build2/
+build_v209/
+build_qio/
+build_probe/
+out/
+out_qio/
+out_v209/
+out_probe/
+*.log

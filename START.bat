@@ -6,7 +6,7 @@ echo   DentalMotion Monitor - Starting System
 echo  ==========================================
 echo.
 echo  [1/2] Starting Gateway (network bridge)...
-start "NHOS Gateway" cmd /k "cd /d "%~dp0gateway" && python scripts/start.py && pause"
+start "DentalMotion Gateway" cmd /k "cd /d "%~dp0gateway" && python scripts/start.py && pause"
 
 timeout /t 4 /nobreak >nul
 

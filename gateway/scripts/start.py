@@ -68,7 +68,7 @@ def _install_deps():
 
 def _create_config():
     if not CONFIG_FILE.exists():
-        shutil.copy(APP_DIR / "config.example.json", CONFIG_FILE)
+        shutil.copy(APP_DIR / "config.json", CONFIG_FILE)
         print(f"Created {CONFIG_FILE} - open the WebUI to finish setup.")
 
 
@@ -76,8 +76,8 @@ def _launch():
     python = str(_venv_bin("python"))
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
 
-    env["NEWHORIZONS_GATEWAY_APP_ROOT"] = str(APP_DIR)
-    env["NEWHORIZONS_GATEWAY_RESTART_COMMAND"] = f"{sys.executable} {APP_DIR / 'scripts' / 'start.py'}"
+    env["DENTALMOTION_GATEWAY_APP_ROOT"] = str(APP_DIR)
+    env["DENTALMOTION_GATEWAY_RESTART_COMMAND"] = f"{sys.executable} {APP_DIR / 'scripts' / 'start.py'}"
 
     with open(LOG_FILE, "w") as log:
         kwargs = dict(
@@ -91,7 +91,7 @@ def _launch():
             kwargs["start_new_session"] = True
 
         proc = subprocess.Popen(
-            [python, "-m", "newhorizons_gateway.main", "--config", str(CONFIG_FILE)],
+            [python, "-m", "dentalmotion_gateway.main", "--config", str(CONFIG_FILE)],
             **kwargs,
         )
 

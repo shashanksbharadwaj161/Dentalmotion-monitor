@@ -35,7 +35,7 @@ class LocalUDPIngestServer:
         sock.settimeout(0.5)
         self._sock = sock
         self._running.set()
-        self._thread = threading.Thread(target=self._run, name="newhorizons-gateway-udp", daemon=True)
+        self._thread = threading.Thread(target=self._run, name="dentalmotion-gateway-udp", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:

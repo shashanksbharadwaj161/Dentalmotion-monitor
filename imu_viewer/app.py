@@ -1,5 +1,5 @@
 """
-New Horizons OS – Local IMU Viewer
+DentalMotion Monitor – Local IMU Viewer
 Listens for UDP packets mirrored by the gateway on port 13253,
 parses 6D IMU data (accel XYZ + gyro XYZ), serves a live Chart.js UI,
 and saves sessions to CSV.
@@ -24,15 +24,15 @@ from flask import Flask, Response, jsonify, render_template, request
 
 # ── Config ───────────────────────────────────────────────────────────────────
 UDP_HOST = "0.0.0.0"
-UDP_PORT = int(os.environ.get("NHOS_UDP_PORT", 13253))   # mirror port from gateway
-WEB_PORT = int(os.environ.get("NHOS_WEB_PORT", 8765))
+UDP_PORT = int(os.environ.get("DENTALMOTION_UDP_PORT", 13253))   # mirror port from gateway
+WEB_PORT = int(os.environ.get("DENTALMOTION_WEB_PORT", 8765))
 DATA_DIR     = Path.home() / "Desktop" / "DentalMotion_Recordings"
-GATEWAY_URL  = os.environ.get("NHOS_GATEWAY_URL", "http://127.0.0.1:5052")
-DEVICE_UID   = os.environ.get("NHOS_DEVICE_UID",  "3CDC75413DC8")
+GATEWAY_URL  = os.environ.get("DENTALMOTION_GATEWAY_URL", "http://127.0.0.1:5052")
+DEVICE_UID   = os.environ.get("DENTALMOTION_DEVICE_UID",  "3CDC75413DE8")
 HISTORY_SECONDS = 15
 MAX_HISTORY = 1500    # 100 fps × 15 s
 
-# ── NHOS packet constants ─────────────────────────────────────────────────────
+# ── DentalMotion packet constants ─────────────────────────────────────────────────────
 MAGIC = 0xA55A
 HEADER_LEN = 20
 FLAG_IMU = 0x01
@@ -135,12 +135,12 @@ def _udp_worker() -> None:
 
 # ── Gateway helper ────────────────────────────────────────────────────────────
 
-def _gw_request(method: str, path: str, body: dict | None = None) -> dict:
+def _gw_request(method: str, path: str, body: dict | None = None, timeout: float = 6) -> dict:
     url  = GATEWAY_URL + path
     data = json.dumps(body, separators=(",", ":")).encode() if body is not None else None
     hdrs: dict[str, str] = {"Content-Type": "application/json"} if data else {}
     req  = urllib.request.Request(url, data=data, headers=hdrs, method=method)
-    with urllib.request.urlopen(req, timeout=6) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode())
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
@@ -266,6 +266,39 @@ def net_wifi() -> Response:
     except Exception as exc:
         return jsonify({"ok": False, "error": "reboot_failed", "set_wifi": r1, "detail": str(exc)}), 502
     return jsonify({"ok": True, "set_wifi": r1, "reboot": r2})
+
+
+@app.post("/api/net/provision")
+def net_provision() -> Response:
+    """First-time setup for a board that has never been on WiFi before (or
+    needs to move to a new network) — no manual visit to 192.168.4.1
+    required. This machine's WiFi briefly joins the board's own setup
+    hotspot, hands it the credentials, then switches back."""
+    body = request.get_json(silent=True) or {}
+    ssid = str(body.get("ssid") or "").strip()
+    password = str(body.get("password") or "")
+    if not ssid:
+        return jsonify({"ok": False, "error": "ssid_required"}), 400
+    try:
+        # This genuinely takes a while: the gateway machine disconnects its
+        # own WiFi, scans, joins the board's setup hotspot, posts
+        # credentials, then reconnects to its original network.
+        result = _gw_request("POST", "/api/provision", {"ssid": ssid, "password": password}, timeout=45)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode() if hasattr(exc, "read") else str(exc)
+        return jsonify({"ok": False, "error": "provision_failed", "detail": raw}), 502
+    except Exception as exc:
+        return jsonify({"ok": False, "error": "gateway_unreachable", "detail": str(exc)}), 502
+    return jsonify(result)
+
+
+@app.get("/api/net/provision/scan")
+def net_provision_scan() -> Response:
+    try:
+        result = _gw_request("GET", "/api/provision/scan")
+    except Exception as exc:
+        return jsonify({"ok": False, "error": "gateway_unreachable", "detail": str(exc)}), 502
+    return jsonify(result)
 
 
 @app.post("/api/net/rediscover")

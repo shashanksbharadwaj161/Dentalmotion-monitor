@@ -15,9 +15,11 @@ from typing import Any
 from . import __version__
 
 
-DEFAULT_MANIFEST_URL = "https://raw.githubusercontent.com/wenzi7777/New-Horizons-Gateway/main/releases/gateway-latest.json"
+# No default update source: this is a local-only tool with no dependency on
+# any external repo. Set DENTALMOTION_GATEWAY_UPDATE_MANIFEST to opt in.
+DEFAULT_MANIFEST_URL = ""
 ALLOWED_UPDATE_ENTRIES = (
-    "newhorizons_gateway",
+    "dentalmotion_gateway",
     "scripts",
     "requirements.txt",
     "README.md",
@@ -31,9 +33,9 @@ class GatewayUpdateManager:
         staging_root: str | Path | None = None,
         manifest_url: str | None = None,
     ) -> None:
-        self.app_root = Path(app_root or os.getenv("NEWHORIZONS_GATEWAY_APP_ROOT") or Path(__file__).resolve().parents[1])
-        self.staging_root = Path(staging_root or os.getenv("NEWHORIZONS_GATEWAY_UPDATE_DIR") or self.app_root / ".run" / "updates")
-        self.manifest_url = manifest_url or os.getenv("NEWHORIZONS_GATEWAY_UPDATE_MANIFEST") or DEFAULT_MANIFEST_URL
+        self.app_root = Path(app_root or os.getenv("DENTALMOTION_GATEWAY_APP_ROOT") or Path(__file__).resolve().parents[1])
+        self.staging_root = Path(staging_root or os.getenv("DENTALMOTION_GATEWAY_UPDATE_DIR") or self.app_root / ".run" / "updates")
+        self.manifest_url = manifest_url or os.getenv("DENTALMOTION_GATEWAY_UPDATE_MANIFEST") or DEFAULT_MANIFEST_URL
         self.latest_manifest: dict[str, Any] = {}
         self.downloaded_zip = self.staging_root / "gateway-update.zip"
         self.downloaded_sha256 = ""
@@ -64,6 +66,10 @@ class GatewayUpdateManager:
         }
 
     def check(self) -> dict[str, Any]:
+        if not self.manifest_url:
+            self.phase = "error"
+            self.last_error = "no_update_source_configured"
+            return self.state()
         try:
             with urllib.request.urlopen(self.manifest_url, timeout=12) as response:
                 payload = response.read()
@@ -145,7 +151,7 @@ class GatewayUpdateManager:
         return self.state()
 
     def restart(self) -> dict[str, Any]:
-        command = os.getenv("NEWHORIZONS_GATEWAY_RESTART_COMMAND", "").strip()
+        command = os.getenv("DENTALMOTION_GATEWAY_RESTART_COMMAND", "").strip()
         if not command:
             self.manual_update_required = True
             self.phase = "restart_required"
@@ -168,4 +174,4 @@ class GatewayUpdateManager:
 
     @staticmethod
     def self_update_supported() -> bool:
-        return os.getenv("NEWHORIZONS_GATEWAY_ALLOW_SELF_UPDATE", "0") == "1"
+        return os.getenv("DENTALMOTION_GATEWAY_ALLOW_SELF_UPDATE", "0") == "1"

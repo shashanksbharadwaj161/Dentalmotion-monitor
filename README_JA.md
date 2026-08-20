@@ -26,7 +26,7 @@
 
 | アイテム | 詳細 |
 |---------|------|
-| **センサーグローブ** | New Horizons OS ボード（すでに組み立て済み） |
+| **センサーグローブ** | DentalMotion Monitor ボード（すでに組み立て済み） |
 | **Windows PC / ノートPC** | Windows 10 または Windows 11 |
 | **WiFiネットワーク** | PCとグローブが**同じWiFiに接続**している必要があります |
 | **ブラウザ** | Chrome・Edge・Firefox など何でも可 |
@@ -119,7 +119,7 @@ pip install -r gateway\requirements.txt -r imu_viewer\requirements.txt
 
 ファイルはデスクトップの **「DentalMotion\_Recordings」** フォルダに自動保存されます。
 
-**ファイル名の例：** `imu_3CDC75413DC8_20260703_142500.csv`（デバイスID\_年月日\_時分秒）
+**ファイル名の例：** `imu_3CDC75413DE8_20260703_142500.csv`（デバイスID\_年月日\_時分秒）
 
 **Excelで開く方法：** ファイルをダブルクリックするだけで自動的にExcelが開きます。
 各行が1回のセンサー計測データです（1秒間に約100行）。
@@ -206,8 +206,8 @@ pip install -r gateway\requirements.txt -r imu_viewer\requirements.txt
 2. **BOOTボタン**（基板上の小さなボタン）を**押したまま**にする
 3. BOOTボタンを押しながら**電源を入れる**
 4. 電源が入ってから**3秒間押し続け**て、その後離す
-5. グローブが一時的なWiFi **`NHOS-Setup-3CDC75`**（パスワードなし）を作成します
-6. スマートフォンで **`NHOS-Setup-3CDC75`** に接続する
+5. グローブが一時的なWiFi **`DentalMotion-Setup-3CDC75`**（パスワードなし）を作成します
+6. スマートフォンで **`DentalMotion-Setup-3CDC75`** に接続する
 7. ブラウザで **http://192.168.4.1** を開く
 8. 新しいWiFi名とパスワードを入力して保存する
 9. グローブが再起動し新しいネットワークに接続します
@@ -241,5 +241,5 @@ pip install -r gateway\requirements.txt -r imu_viewer\requirements.txt
 
 ---
 
-*DentalMotion Monitor — New Horizons OS v0.10.1 上で動作*
+*DentalMotion Monitor — DentalMotion Monitor v0.10.1 上で動作*
 *BMI270 IMU センサー — 加速度計 ±8g / 100 Hz、ジャイロスコープ ±2000 °/s / 100 Hz*

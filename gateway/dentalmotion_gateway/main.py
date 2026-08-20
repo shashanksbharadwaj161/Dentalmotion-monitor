@@ -15,12 +15,12 @@ from .result_chunks import RESULT_CHUNK_TYPE, ResultChunkReassembler
 from .state import GatewayState
 from .udp_control import UDPCommandDispatcher, normalize_device_uid
 from .update_manager import GatewayUpdateManager
-from .upstream_wss import UpstreamWSSClient
+from .upstream_wss import LocalUpstream
 from .web import GatewayWebServer
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="New Horizons local UDP/JSON to WSS gateway")
+    parser = argparse.ArgumentParser(description="DentalMotion local UDP/JSON to WSS gateway")
     parser.add_argument("--config", help="Path to host gateway config", default=None)
     args = parser.parse_args()
     config_store = GatewayConfigStore(args.config)
@@ -30,7 +30,7 @@ def main() -> None:
     _mirror_sock: socket.socket | None = None
     if _mirror_port:
         _mirror_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        print("New Horizons Gateway: mirroring UDP packets to 127.0.0.1:{}".format(_mirror_port))
+        print("DentalMotion Gateway: mirroring UDP packets to 127.0.0.1:{}".format(_mirror_port))
     arduino_hosts: dict[str, str] = {}
     result_chunks = ResultChunkReassembler()
     running = True
@@ -109,10 +109,8 @@ def main() -> None:
     def send_udp_datagram(payload: bytes, addr: tuple[str, int]) -> None:
         udp_server.send_datagram(payload, addr)
 
-    upstream = UpstreamWSSClient(
-        server_url=str(config["server_url"]),
+    upstream = LocalUpstream(
         gateway_id=str(config["gateway_id"]),
-        auth_token=str(config.get("auth_token") or ""),
         on_command=on_command,
         on_message=on_upstream_message,
     )
@@ -176,8 +174,8 @@ def main() -> None:
                 device_uid,
                 {
                     "device_uid": device_uid,
-                    "device_name": "New Horizons OS-{}".format(device_uid),
-                    "protocol": "NHO/Arduino/1",
+                    "device_name": "DentalMotion Monitor-{}".format(device_uid),
+                    "protocol": "DentalMotion/1",
                     "transport_path": "arduino_heartbeat",
                 },
                 addr,
@@ -190,8 +188,8 @@ def main() -> None:
                 "status",
                 {
                     "device_uid": device_uid,
-                    "device_name": "New Horizons OS-{}".format(device_uid),
-                    "protocol": "NHO/Arduino/1",
+                    "device_name": "DentalMotion Monitor-{}".format(device_uid),
+                    "protocol": "DentalMotion/1",
                     "transport_path": "arduino_udp",
                 },
                 addr,
@@ -223,10 +221,9 @@ def main() -> None:
     def apply_runtime_config(current_config: dict[str, Any]) -> None:
         nonlocal runtime_started
         upstream.gateway_id = str(current_config.get("gateway_id") or "")
-        upstream.update_server(str(current_config["server_url"]), str(current_config.get("auth_token") or ""))
         if discovery is not None:
             discovery.gateway_id = str(current_config.get("gateway_id") or "")
-            discovery.gateway_name = str(current_config.get("gateway_name") or "New Horizons Gateway")
+            discovery.gateway_name = str(current_config.get("gateway_name") or "DentalMotion Gateway")
             discovery.priority = int(current_config.get("discovery_priority", 100))
         should_run = bool(current_config.get("enabled"))
         if should_run and not runtime_started:
@@ -258,14 +255,13 @@ def main() -> None:
     web_server.start()
     apply_runtime_config(config)
     print(
-        "New Horizons Gateway web=http://127.0.0.1:{} enabled={} udp={}:{} findme={}:{} upstream={}".format(
+        "DentalMotion Gateway web=http://127.0.0.1:{} enabled={} udp={}:{} findme={}:{}".format(
             config["listen_web_port"],
             bool(config.get("enabled")),
             config["listen_udp_host"],
             config["listen_udp_port"],
             config["listen_discovery_host"],
             config["listen_discovery_port"],
-            config["server_url"],
         )
     )
     last_gateway_status = 0.0
@@ -277,12 +273,10 @@ def main() -> None:
                 last_gateway_status = now
                 current_config = config_store.snapshot()
                 upstream.send_gateway_status({
-                    "gateway_name": current_config.get("gateway_name", "New Horizons Gateway"),
+                    "gateway_name": current_config.get("gateway_name", "DentalMotion Gateway"),
                     "gateway_id": current_config.get("gateway_id", ""),
                     "enabled": bool(current_config.get("enabled")),
                     "version": update_manager.state().get("current_version", ""),
-                    "target_mode": current_config.get("target_mode", ""),
-                    "server_url": current_config.get("server_url", ""),
                     "listen_udp_port": int(udp_server.bound_port),
                     "listen_discovery_port": int(discovery.bound_port) if discovery is not None else int(current_config.get("listen_discovery_port", 22346)),
                     "upstream": upstream.status(),

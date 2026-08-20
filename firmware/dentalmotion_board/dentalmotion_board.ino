@@ -1,11 +1,10 @@
-// DentalMotion Monitor firmware — ESP32-S3-MINI-1 ("VD-CTL/R v1.0.F 2026.4")
+// DentalMotion Monitor firmware — ESP32-S3-MINI-1 ("DentalMotion-ESP32S3 v1.0")
 //
 // Minimal, single-purpose sketch: IMU-only wrist motion monitor.
-// Speaks the exact wire protocol expected by gateway/newhorizons_gateway and
+// Speaks the exact wire protocol expected by gateway/dentalmotion_gateway and
 // imu_viewer/app.py (see arduino_protocol.py, discovery.py, udp_control.py,
-// main.py::handle_udp_control, and _parse_packet in app.py) so it is a
-// drop-in replacement for the old New Horizons OS firmware — zero backend
-// changes required.
+// main.py::handle_udp_control, and _parse_packet in app.py). Fully local:
+// no cloud dependency, no external branding.
 //
 // Board:    ESP32-S3-MINI-1, 8MB flash, no PSRAM
 // FQBN:     esp32:esp32:esp32s3:FlashSize=8M,PartitionScheme=default_8MB
@@ -20,11 +19,12 @@
 #include <Wire.h>
 #include <Arduino_BMI270_BMM150.h>
 #include <ArduinoJson.h>
+#include <Adafruit_NeoPixel.h>
 #include <strings.h>
 
 // ---------------------------------------------------------------------------
-// Protocol constants (must match gateway/newhorizons_gateway/arduino_protocol.py
-// and gateway/newhorizons_gateway/discovery.py exactly)
+// Protocol constants (must match gateway/dentalmotion_gateway/arduino_protocol.py
+// and gateway/dentalmotion_gateway/discovery.py exactly)
 // ---------------------------------------------------------------------------
 static const uint16_t FINDME_PORT   = 22346;  // discovery.py default listen_discovery_port
 static const uint16_t STREAM_PORT   = 13250;  // udp_control.py _DEVICE_CONTROL_PORT / listen_udp_port
@@ -32,13 +32,19 @@ static const uint16_t PACKET_MAGIC  = 0xA55A;
 static const uint8_t  PACKET_VERSION = 3;
 static const uint8_t  FLAG_IMU       = 0x01;
 static const uint8_t  FLAG_HEARTBEAT = 0x80;
-static const char*    PROTOCOL_TAG   = "NHO/Arduino/1";
+static const char*    PROTOCOL_TAG   = "DentalMotion/1";
 static const char*    FIRMWARE_VERSION = "v1.0.0";
-static const char*    HARDWARE_MODEL   = "VD-CTL/R v1.0.F 2026.4";
+static const char*    HARDWARE_MODEL   = "DentalMotion-ESP32S3 v1.0";
 
 static const uint32_t IMU_SAMPLE_INTERVAL_MS = 10;   // ~100Hz
 static const uint32_t HEARTBEAT_INTERVAL_MS  = 3000;
 static const uint32_t FINDME_INTERVAL_MS     = 3000;
+
+// Status LED: single NeoPixel on GPIO11 (identified by physical probing —
+// this board has no silkscreen/datasheet reference for it, just "SYS").
+static const uint8_t  LED_PIN = 11;
+static const uint8_t  BOOT_CYCLES_FOR_DISCOVERY = 5;    // power off/on this many times fast
+static const uint32_t BOOT_COUNTER_RESET_MS     = 8000; // ...within this long a window each time
 
 // ---------------------------------------------------------------------------
 // Globals
@@ -48,6 +54,18 @@ WebServer portalServer(80);
 DNSServer dnsServer;
 WiFiUDP findmeUdp;
 WiFiUDP streamUdp;
+Adafruit_NeoPixel statusLed(1, LED_PIN, NEO_GRB + NEO_KHZ800);
+
+enum LedMode {
+  LED_MODE_IMU_FAIL,     // solid-ish red blink: IMU init failed, halted
+  LED_MODE_SETUP,        // blue blink: broadcasting the setup AP
+  LED_MODE_CONNECTING,   // dim white blink: joining stored WiFi
+  LED_MODE_WAITING,      // amber blink: on WiFi, waiting for a gateway
+  LED_MODE_ATTACHED,     // solid green: streaming to a gateway
+};
+LedMode ledMode = LED_MODE_CONNECTING;
+unsigned long normalOpStartMs = 0;
+bool bootCounterCleared = true;
 
 uint8_t macBytes[6];
 char uidHex[13];           // 12 hex chars + NUL, uppercase
@@ -85,6 +103,7 @@ void handleCommand(const char* command, JsonVariantConst payload, const char* re
                     IPAddress destIp, uint16_t destPort);
 void serviceControl();
 bool connectToStoredWifi();
+void serviceLed();
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -97,6 +116,35 @@ void computeUid() {
     uidHex[i * 2 + 1] = hexd[macBytes[i] & 0xF];
   }
   uidHex[12] = '\0';
+}
+
+// ---------------------------------------------------------------------------
+// Status LED (single NeoPixel, GPIO11). Non-blocking — driven by millis(),
+// safe to call every loop() iteration from any mode.
+// ---------------------------------------------------------------------------
+void serviceLed() {
+  unsigned long now = millis();
+  bool blinkPhase = ((now / 400) % 2) == 0;
+  uint32_t color = 0;
+  switch (ledMode) {
+    case LED_MODE_IMU_FAIL:
+      color = blinkPhase ? statusLed.Color(60, 0, 0) : statusLed.Color(0, 0, 0);
+      break;
+    case LED_MODE_SETUP:
+      color = blinkPhase ? statusLed.Color(0, 0, 60) : statusLed.Color(0, 0, 0);
+      break;
+    case LED_MODE_CONNECTING:
+      color = blinkPhase ? statusLed.Color(25, 25, 25) : statusLed.Color(0, 0, 0);
+      break;
+    case LED_MODE_WAITING:
+      color = blinkPhase ? statusLed.Color(50, 30, 0) : statusLed.Color(0, 0, 0);
+      break;
+    case LED_MODE_ATTACHED:
+      color = statusLed.Color(0, 50, 0);
+      break;
+  }
+  statusLed.setPixelColor(0, color);
+  statusLed.show();
 }
 
 IPAddress broadcastAddressForCurrentSubnet() {
@@ -170,7 +218,8 @@ void handlePortalRedirect() {
 
 void startSetupAp() {
   setupMode = true;
-  apName = String("NewHorizonsOS-") + uidHex;
+  ledMode = LED_MODE_SETUP;
+  apName = String("DentalMotion-Setup-") + uidHex;
 
   WiFi.mode(WIFI_AP);
   IPAddress apIp(192, 168, 4, 1);
@@ -200,7 +249,7 @@ void sendFindmeDiscover(const char* currentGatewayId) {
   StaticJsonDocument<384> doc;
   doc["type"] = "findme_discover";
   doc["device_uid"] = uidHex;
-  doc["device_name"] = String("New Horizons OS-") + uidHex;
+  doc["device_name"] = String("DentalMotion Monitor-") + uidHex;
   doc["mode"] = "normal";
   doc["firmware_version"] = FIRMWARE_VERSION;
   doc["hardware_model"] = HARDWARE_MODEL;
@@ -255,6 +304,7 @@ void serviceFindme() {
     gatewayPort = offeredPort;
     currentGatewayId = String((const char*)(doc["gateway_id"] | ""));
     attached = true;
+    ledMode = LED_MODE_ATTACHED;
   } else if (strcmp(type, "findme_probe") == 0) {
     sendFindmeDiscover(attached ? currentGatewayId.c_str() : nullptr);
   }
@@ -384,11 +434,13 @@ bool connectToStoredWifi() {
   String password = prefs.getString("pass", "");
   if (ssid.length() == 0) return false;
 
+  ledMode = LED_MODE_CONNECTING;
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid.c_str(), password.c_str());
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
-    delay(200);
+    serviceLed();
+    delay(50);
   }
   return WiFi.status() == WL_CONNECTED;
 }
@@ -399,8 +451,19 @@ bool connectToStoredWifi() {
 void setup() {
   Serial.begin(115200);
 
+  statusLed.begin();
+  statusLed.setBrightness(255);
+  ledMode = LED_MODE_CONNECTING;
+  serviceLed();
+
   Wire.begin(45, 42, 400000);
-  IMU.begin(BOSCH_ACCELEROMETER_ONLY);
+  if (!IMU.begin(BOSCH_ACCELEROMETER_ONLY)) {
+    ledMode = LED_MODE_IMU_FAIL;
+    while (true) {
+      serviceLed();
+      delay(50);
+    }
+  }
   IMU.setContinuousMode();
 
   WiFi.mode(WIFI_STA);
@@ -408,26 +471,51 @@ void setup() {
 
   prefs.begin("wifi", false);
 
-  if (!connectToStoredWifi()) {
+  // Physical "discovery mode" trigger: power the board off/on this many
+  // times, each within BOOT_COUNTER_RESET_MS of the last, to force it back
+  // into setup-AP mode even if it already has working WiFi credentials
+  // stored — no BOOT button needed. Ordinary, spaced-out power cycles never
+  // accumulate: the counter is cleared after a few seconds of stable normal
+  // operation (see loop()).
+  uint8_t bootCount = prefs.getUChar("bootcnt", 0) + 1;
+  bool forceSetupMode = false;
+  if (bootCount >= BOOT_CYCLES_FOR_DISCOVERY) {
+    bootCount = 0;
+    forceSetupMode = true;
+  }
+  prefs.putUChar("bootcnt", bootCount);
+
+  if (forceSetupMode || !connectToStoredWifi()) {
     startSetupAp();
     return; // stay dumb: setup mode only services the portal until reboot
   }
 
+  ledMode = LED_MODE_WAITING;
   findmeUdp.begin(FINDME_PORT);
   streamUdp.begin(STREAM_PORT);
+  normalOpStartMs = millis();
+  bootCounterCleared = false;
 }
 
 void loop() {
+  serviceLed();
+
   if (setupMode) {
     dnsServer.processNextRequest();
     portalServer.handleClient();
     return;
   }
 
+  if (!bootCounterCleared && millis() - normalOpStartMs >= BOOT_COUNTER_RESET_MS) {
+    prefs.putUChar("bootcnt", 0);
+    bootCounterCleared = true;
+  }
+
   if (WiFi.status() != WL_CONNECTED) {
     // Transient drop — the ESP32 WiFi stack auto-reconnects with the stored
     // credentials. Just skip this iteration's network work instead of
     // bouncing back into setup mode.
+    if (attached) ledMode = LED_MODE_WAITING;
     attached = false;
     delay(50);
     return;

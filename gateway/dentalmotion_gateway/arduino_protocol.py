@@ -5,7 +5,7 @@ import struct
 from typing import Any
 
 
-PROTOCOL = "NHO/Arduino/1"
+PROTOCOL = "DentalMotion/1"
 CONTROL_PORT = 22345
 PACKET_MAGIC = 0xA55A
 PACKET_VERSION = 3

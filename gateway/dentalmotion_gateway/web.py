@@ -3,18 +3,16 @@ from __future__ import annotations
 import json
 import secrets
 import threading
-import urllib.error
-import urllib.request
 from typing import Any, Callable
-from urllib.parse import urlparse
 
 from flask import Flask, jsonify, request
 from werkzeug.serving import make_server
 
 from . import __version__
-from .config_store import GatewayConfigStore, LOCAL_URL, PRODUCTION_URL, validate_gateway_id
+from .config_store import GatewayConfigStore, validate_gateway_id
 from .state import GatewayState
 from .update_manager import GatewayUpdateManager
+from . import wifi_provision
 
 
 ConfigCallback = Callable[[dict[str, Any]], None]
@@ -27,7 +25,7 @@ PAGE = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>New Horizons Gateway</title>
+  <title>DentalMotion Gateway</title>
   <style>
     :root { color-scheme:light; --bg:#f7f7f3; --panel:#fffffb; --ink:#151816; --muted:#697068; --line:#d9ddd4; --green:#3f7b61; --danger:#b6554c; --warn:#b5842a; --blue:#3f648f; }
     * { box-sizing:border-box; }
@@ -145,7 +143,7 @@ PAGE = """<!doctype html>
 
   <!-- ── Sticky topbar ── -->
   <header class="topbar">
-    <span class="topbar-brand" data-i18n="appTitle">New Horizons Gateway</span>
+    <span class="topbar-brand" data-i18n="appTitle">DentalMotion Gateway</span>
     <span class="topbar-gw mono" id="topbar-gw-id"></span>
     <span id="topbar-badge" class="badge">-</span>
     <select id="language-select" style="width:auto;min-height:34px;padding:4px 8px">
@@ -162,7 +160,6 @@ PAGE = """<!doctype html>
       <div class="wiz-steps">
         <div class="wiz-pip" id="wiz-pip0"></div>
         <div class="wiz-pip" id="wiz-pip1"></div>
-        <div class="wiz-pip" id="wiz-pip2"></div>
       </div>
 
       <!-- Step 1: Gateway ID -->
@@ -171,7 +168,7 @@ PAGE = """<!doctype html>
         <p class="wiz-sub" data-i18n="w0sub">Assign a unique ID so devices can identify this gateway on your local network.</p>
         <div class="field" style="margin-bottom:12px">
           <label data-i18n="gatewayId">Gateway ID</label>
-          <input id="setup-gateway-id-input" maxlength="64" placeholder="nh-gateway-xxxxxx">
+          <input id="setup-gateway-id-input" maxlength="64" placeholder="dentalmotion-gateway-xxxxxx">
         </div>
         <div class="wiz-actions">
           <button id="setup-auto-gateway-id" data-i18n="autoGenerate">Auto-generate</button>
@@ -180,40 +177,15 @@ PAGE = """<!doctype html>
         <p class="notice" id="setup-message"></p>
       </div>
 
-      <!-- Step 2: Upstream server -->
+      <!-- Step 2: Confirm and enable -->
       <div class="wiz-step" id="wiz-step-1">
-        <p class="wiz-title" data-i18n="w1title">Upstream server</p>
-        <p class="wiz-sub" data-i18n="w1sub">Choose which New Horizons server this gateway relays device data to.</p>
-        <div class="field" style="margin-bottom:10px">
-          <label data-i18n="mode">Mode</label>
-          <select id="wiz-target-mode">
-            <option value="production" data-i18n="production">Production</option>
-            <option value="local" data-i18n="local">Local</option>
-            <option value="manual" data-i18n="manual">Manual URL</option>
-          </select>
-        </div>
-        <div class="field" id="wiz-manual-wrap" style="display:none;margin-bottom:10px">
-          <label data-i18n="manualUrl">Manual WS/WSS URL</label>
-          <input id="wiz-manual-url" placeholder="ws://127.0.0.1:5051/newhorizons/gateway/ws">
-        </div>
-        <p class="muted small" id="wiz-url-preview"></p>
-        <div class="wiz-actions">
-          <button id="wiz-back-1" data-i18n="back">← Back</button>
-          <button class="primary" id="wiz-next-1" data-i18n="next">Next →</button>
-        </div>
-        <p class="notice" id="wiz-msg-1"></p>
-      </div>
-
-      <!-- Step 3: Confirm and enable -->
-      <div class="wiz-step" id="wiz-step-2">
         <p class="wiz-title" data-i18n="w2title">Enable Gateway</p>
         <p class="wiz-sub" data-i18n="w2sub">Confirm your settings and start the gateway service.</p>
         <div class="wiz-confirm-grid">
           <div class="wiz-card"><span class="muted small" data-i18n="gatewayId">Gateway ID</span><br><strong id="wiz-confirm-id">-</strong></div>
-          <div class="wiz-card"><span class="muted small" data-i18n="mode">Mode</span><br><strong id="wiz-confirm-mode">-</strong></div>
         </div>
         <div class="wiz-actions">
-          <button id="wiz-back-2" data-i18n="back">← Back</button>
+          <button id="wiz-back-1" data-i18n="back">← Back</button>
           <button class="primary" id="setup-save-id" data-i18n="enableAndStart">Enable &amp; Start</button>
         </div>
         <p class="notice" id="wiz-msg-2"></p>
@@ -235,7 +207,7 @@ PAGE = """<!doctype html>
         <p class="muted mono small" id="update-mini">-</p>
       </section>
       <section class="panel span-4">
-        <span class="stat" data-i18n="upstream">Upstream</span>
+        <span class="stat" data-i18n="upstream">Status</span>
         <span id="upstream-badge" class="badge">-</span>
         <p class="muted mono small" id="upstream-url">-</p>
       </section>
@@ -248,42 +220,15 @@ PAGE = """<!doctype html>
         <div class="toolbar" style="margin-bottom:14px">
           <div class="field">
             <label data-i18n="gatewayId">Gateway ID</label>
-            <input id="gateway-id-input" maxlength="64" placeholder="nh-gateway-xxxxxx">
+            <input id="gateway-id-input" maxlength="64" placeholder="dentalmotion-gateway-xxxxxx">
           </div>
           <button id="auto-gateway-id" data-i18n="autoGenerate">Auto-generate</button>
           <div class="sw-row" style="flex:0;white-space:nowrap">
             <label class="sw"><input type="checkbox" id="gateway-enabled"><span class="sw-track"></span></label>
-            <span data-i18n="enabledCopy">Start upstream, UDP and FindMe</span>
+            <span data-i18n="enabledCopy">Start UDP and FindMe</span>
           </div>
           <button class="primary" id="save-settings" data-i18n="save">Save</button>
         </div>
-
-        <!-- Target server -->
-        <div class="stack">
-          <div class="toolbar">
-            <div class="field narrow">
-              <label data-i18n="mode">Mode</label>
-              <select id="target-mode">
-                <option value="production" data-i18n="production">Production</option>
-                <option value="local" data-i18n="local">Local</option>
-                <option value="manual" data-i18n="manual">Manual</option>
-              </select>
-            </div>
-            <div class="field">
-              <label data-i18n="manualUrl">Manual WS/WSS URL</label>
-              <input id="manual-url" placeholder="ws://127.0.0.1:5051/newhorizons/gateway/ws">
-            </div>
-          </div>
-          <div class="summary-grid">
-            <div class="summary-card"><span class="stat" data-i18n="connectionMode">Connection mode</span><strong id="target-mode-summary">-</strong></div>
-            <div class="summary-card"><span class="stat" data-i18n="effectiveServer">Effective server</span><strong class="mono small" id="effective-server">-</strong></div>
-            <div class="summary-card"><span class="stat" data-i18n="upstreamStatus">Upstream status</span><strong id="upstream-summary">-</strong></div>
-          </div>
-        </div>
-        <p class="muted small" style="margin-top:10px">
-          <span data-i18n="production">Production</span>: <span class="mono">__PRODUCTION_URL__</span><br>
-          <span data-i18n="local">Local</span>: <span class="mono">__LOCAL_URL__</span>
-        </p>
         <p class="notice" id="settings-message"></p>
       </section>
 
@@ -370,11 +315,11 @@ PAGE = """<!doctype html>
     const I18N = {
       en: {
         action:"Action", address:"Address", allow:"Allow", applyUpdate:"Apply update", autoGenerate:"Auto-generate",
-        appTitle:"New Horizons Gateway", back:"← Back", checkUpdate:"Check for update",
+        appTitle:"DentalMotion Gateway", back:"← Back", checkUpdate:"Check for update",
         claims:"Claims", connectionMode:"Connection mode", denied:"Denied", device:"Device",
         discoverDevices:"Discover devices", downloadUpdate:"Download update",
         effectiveServer:"Effective server", enableAndStart:"Enable & Start",
-        enabledCopy:"Start upstream, UDP and FindMe", error:"Error",
+        enabledCopy:"Start UDP and FindMe", error:"Error",
         gateway:"Gateway", gatewayId:"Gateway ID", gatewaySettings:"Gateway Settings",
         hideNearby:"Hide nearby", showNearby:"Show nearby",
         language:"Language", lastSeen:"Last seen", localServices:"Local services",
@@ -398,17 +343,17 @@ PAGE = """<!doctype html>
         w0title:"Set up your Gateway",
         w0sub:"Assign a unique ID so devices can identify this gateway on your local network.",
         w1title:"Upstream server",
-        w1sub:"Choose which New Horizons server this gateway relays device data to.",
+        w1sub:"Choose which DentalMotion server this gateway relays device data to.",
         w2title:"Enable Gateway",
         w2sub:"Confirm your settings and start the gateway service.",
       },
       ja: {
         action:"操作", address:"アドレス", allow:"許可", applyUpdate:"更新を適用", autoGenerate:"自動生成",
-        appTitle:"New Horizons Gateway", back:"← 戻る", checkUpdate:"更新を確認",
+        appTitle:"DentalMotion Gateway", back:"← 戻る", checkUpdate:"更新を確認",
         claims:"要求", connectionMode:"接続モード", denied:"拒否済み", device:"デバイス",
         discoverDevices:"デバイスを検出", downloadUpdate:"更新をダウンロード",
         effectiveServer:"実際の接続先", enableAndStart:"有効化して開始",
-        enabledCopy:"上流接続、UDP、FindMeを開始", error:"エラー",
+        enabledCopy:"UDP、FindMeを開始", error:"エラー",
         gateway:"ゲートウェイ", gatewayId:"Gateway ID", gatewaySettings:"ゲートウェイ設定",
         hideNearby:"非表示", showNearby:"表示",
         language:"言語", lastSeen:"最終確認", localServices:"ローカルサービス",
@@ -438,11 +383,11 @@ PAGE = """<!doctype html>
       },
       zh: {
         action:"操作", address:"位址", allow:"允許", applyUpdate:"套用更新", autoGenerate:"自動生成",
-        appTitle:"New Horizons 閘道器", back:"← 返回", checkUpdate:"檢查更新",
+        appTitle:"DentalMotion 閘道器", back:"← 返回", checkUpdate:"檢查更新",
         claims:"認領記錄", connectionMode:"連線模式", denied:"已拒絕", device:"設備",
         discoverDevices:"搜尋設備", downloadUpdate:"下載更新",
         effectiveServer:"實際伺服器", enableAndStart:"啟用並開始",
-        enabledCopy:"啟用上游連線、UDP 及 FindMe 服務", error:"錯誤",
+        enabledCopy:"啟用 UDP 及 FindMe 服務", error:"錯誤",
         gateway:"閘道器", gatewayId:"閘道器 ID", gatewaySettings:"閘道器設定",
         hideNearby:"隱藏附近", showNearby:"顯示附近",
         language:"語言", lastSeen:"最後發現", localServices:"本地服務",
@@ -472,9 +417,7 @@ PAGE = """<!doctype html>
       },
     };
 
-    let language = localStorage.getItem("newhorizons-gateway-language") || "en";
-    const PRODUCTION_URL = "__PRODUCTION_URL__";
-    const LOCAL_URL = "__LOCAL_URL__";
+    let language = localStorage.getItem("dentalmotion-gateway-language") || "en";
     let showNearby = true;
     let targetSettingsDirty = false;
     let setupGatewayIdSuggested = false;
@@ -517,23 +460,8 @@ PAGE = """<!doctype html>
       node.className = `notice ${cls}`.trim();
     }
 
-    function resolveTargetServerUrl() {
-      const mode = String(document.getElementById("target-mode").value || "production");
-      if (mode === "local") return LOCAL_URL;
-      if (mode === "manual") return String(document.getElementById("manual-url").value || "").trim() || LOCAL_URL;
-      return PRODUCTION_URL;
-    }
-
-    function updateTargetServerSummary() {
-      const mode = String(document.getElementById("target-mode").value || "production");
-      text("target-mode-summary", tr(mode));
-      text("effective-server", resolveTargetServerUrl());
-    }
-
     function syncTargetSettings(config) {
       if (targetSettingsDirty) return;
-      document.getElementById("target-mode").value = config.target_mode || "production";
-      document.getElementById("manual-url").value = config.manual_url || "";
       document.getElementById("gateway-id-input").value = config.gateway_id || "";
       document.getElementById("gateway-enabled").checked = !!config.enabled;
     }
@@ -541,23 +469,15 @@ PAGE = """<!doctype html>
     // ── Wizard ──────────────────────────────────────────────────────────
     function wizSetStep(step) {
       wizardStep = step;
-      [0, 1, 2].forEach((i) => {
+      [0, 1].forEach((i) => {
         const s = document.getElementById(`wiz-step-${i}`);
         if (s) s.className = `wiz-step${i === step ? " active" : ""}`;
         const p = document.getElementById(`wiz-pip${i}`);
         if (p) p.className = `wiz-pip${i === step ? " active" : i < step ? " done" : ""}`;
       });
-      if (step === 2) {
+      if (step === 1) {
         text("wiz-confirm-id", document.getElementById("setup-gateway-id-input").value || "-");
-        const mode = document.getElementById("wiz-target-mode").value;
-        text("wiz-confirm-mode", tr(mode));
       }
-    }
-
-    function wizResolveUrl(mode, manual) {
-      if (mode === "local") return LOCAL_URL;
-      if (mode === "manual") return String(manual || "").trim() || LOCAL_URL;
-      return PRODUCTION_URL;
     }
 
     document.getElementById("setup-auto-gateway-id").addEventListener("click", async () => {
@@ -577,32 +497,18 @@ PAGE = """<!doctype html>
       wizSetStep(1);
     });
 
-    document.getElementById("wiz-target-mode").addEventListener("change", () => {
-      const mode = document.getElementById("wiz-target-mode").value;
-      document.getElementById("wiz-manual-wrap").style.display = mode === "manual" ? "" : "none";
-      text("wiz-url-preview", wizResolveUrl(mode, document.getElementById("wiz-manual-url").value));
-    });
-    document.getElementById("wiz-manual-url").addEventListener("input", () => {
-      const mode = document.getElementById("wiz-target-mode").value;
-      text("wiz-url-preview", wizResolveUrl(mode, document.getElementById("wiz-manual-url").value));
-    });
-
     document.getElementById("wiz-back-1").addEventListener("click", () => wizSetStep(0));
-    document.getElementById("wiz-next-1").addEventListener("click", () => { notice("wiz-msg-1", ""); wizSetStep(2); });
-    document.getElementById("wiz-back-2").addEventListener("click", () => wizSetStep(1));
 
     document.getElementById("setup-save-id").addEventListener("click", async () => {
       notice("wiz-msg-2", "");
       const btn = document.getElementById("setup-save-id");
       btn.disabled = true;
       try {
-        const mode = document.getElementById("wiz-target-mode").value;
-        const manual = String(document.getElementById("wiz-manual-url").value || "").trim();
         await api("/api/settings", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             gateway_id: String(document.getElementById("setup-gateway-id-input").value || "").trim(),
-            target_mode: mode, manual_url: manual, enabled: true,
+            enabled: true,
           }),
         });
         targetSettingsDirty = false;
@@ -621,8 +527,6 @@ PAGE = """<!doctype html>
         await api("/api/settings", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            target_mode: document.getElementById("target-mode").value,
-            manual_url: document.getElementById("manual-url").value,
             gateway_id: document.getElementById("gateway-id-input").value,
             enabled: document.getElementById("gateway-enabled").checked,
           }),
@@ -645,8 +549,6 @@ PAGE = """<!doctype html>
       }
     });
 
-    document.getElementById("target-mode").addEventListener("change", () => { targetSettingsDirty = true; updateTargetServerSummary(); });
-    document.getElementById("manual-url").addEventListener("input", () => { targetSettingsDirty = true; updateTargetServerSummary(); });
     document.getElementById("gateway-id-input").addEventListener("input", () => { targetSettingsDirty = true; });
     document.getElementById("gateway-enabled").addEventListener("change", () => { targetSettingsDirty = true; });
 
@@ -723,7 +625,7 @@ PAGE = """<!doctype html>
     document.getElementById("language-select").addEventListener("change", (event) => {
       language = event.target.value;
       if (!I18N[language]) language = "en";
-      localStorage.setItem("newhorizons-gateway-language", language);
+      localStorage.setItem("dentalmotion-gateway-language", language);
       refresh();
     });
 
@@ -772,7 +674,6 @@ PAGE = """<!doctype html>
       text("traffic-stats", `${tr("udpIn")} ${Number(data.upstream.udp_in_fps || 0)}/s · ${tr("upstreamSent")} ${Number(data.upstream.upstream_sent_fps || 0)}/s · ${tr("queueDropped")} ${Number(data.upstream.data_queue_dropped || 0)}`);
 
       syncTargetSettings(data.config || {});
-      updateTargetServerSummary();
       renderUpdate(data.update_state || {});
 
       // Counts
@@ -833,7 +734,7 @@ PAGE = """<!doctype html>
     setInterval(refresh, 2000);
   </script>
 </body>
-</html>""".replace("__PRODUCTION_URL__", PRODUCTION_URL).replace("__LOCAL_URL__", LOCAL_URL)
+</html>"""
 
 
 class GatewayWebServer:
@@ -887,8 +788,6 @@ class GatewayWebServer:
             body = request.get_json(silent=True) or {}
             try:
                 patch = {
-                    "target_mode": body.get("target_mode", "production"),
-                    "manual_url": body.get("manual_url", ""),
                     "gateway_id": body.get("gateway_id", ""),
                     "enabled": bool(body.get("enabled", False)),
                 }
@@ -901,7 +800,6 @@ class GatewayWebServer:
                 self.on_config_saved(config)
             else:
                 self.upstream.gateway_id = str(config.get("gateway_id") or "")
-                self.upstream.update_server(str(config["server_url"]), "")
             return jsonify({"ok": True, "config": self._public_config(config)})
 
         @app.post("/api/gateway-id/suggest")
@@ -932,6 +830,31 @@ class GatewayWebServer:
             if self.discovery is not None:
                 self.discovery.send_probe()
             return jsonify({"ok": True})
+
+        @app.get("/api/provision/scan")
+        def provision_scan() -> Any:
+            if not wifi_provision.IS_WINDOWS:
+                return jsonify({"ok": False, "error": "automatic_wifi_switch_only_supported_on_windows", "boards": []})
+            current = wifi_provision.get_current_wifi()
+            interface = current.get("interface") or ""
+            boards = wifi_provision.find_setup_networks(interface) if interface else []
+            return jsonify({"ok": True, "boards": boards, "current_ssid": current.get("ssid", "")})
+
+        @app.post("/api/provision")
+        def provision() -> Any:
+            body = request.get_json(silent=True) or {}
+            ssid = str(body.get("ssid") or "").strip()
+            password = str(body.get("password") or "")
+            board_ssid = str(body.get("board_ssid") or "").strip() or None
+            if not ssid:
+                return jsonify({"ok": False, "error": "ssid_required"}), 400
+            try:
+                result = wifi_provision.provision_board(ssid, password, board_ap_ssid=board_ssid)
+            except wifi_provision.ProvisioningError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 502
+            except Exception as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 500
+            return jsonify(result)
 
         @app.post("/api/devices/<device_uid>/reject")
         def reject(device_uid: str) -> Any:
@@ -992,49 +915,13 @@ class GatewayWebServer:
         return dict(config)
 
     def _request_gateway_id_suggestion(self) -> str:
-        return validate_gateway_id(f"nh-gateway-{secrets.token_hex(3)}")
-
-    def _confirm_gateway_id_available(self, gateway_id: str) -> None:
-        try:
-            payload = self._server_api_post("/api/gateways/suggest-id", {"gateway_id": gateway_id})
-        except urllib.error.HTTPError as exc:
-            if exc.code == 409:
-                raise ValueError("gateway_id_in_use") from exc
-            if exc.code in (401, 403):
-                raise ValueError("gateway_token_unauthorized") from exc
-            return
-        except urllib.error.URLError:
-            return
-        if payload.get("available") is False:
-            raise ValueError("gateway_id_in_use")
-
-    def _server_api_post(self, api_path: str, body: dict[str, Any]) -> dict[str, Any]:
-        config = self.config_store.snapshot()
-        base_url = self._http_base_from_gateway_ws(str(config.get("server_url") or ""))
-        url = f"{base_url}{api_path}"
-        data = json.dumps(body, separators=(",", ":")).encode("utf-8")
-        request_obj = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(request_obj, timeout=8) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("invalid_server_response")
-        return payload
-
-    @staticmethod
-    def _http_base_from_gateway_ws(server_url: str) -> str:
-        parsed = urlparse(server_url)
-        scheme = "https" if parsed.scheme == "wss" else "http"
-        path = parsed.path or ""
-        suffix = "/gateway/ws"
-        if path.endswith(suffix):
-            path = path[: -len(suffix)]
-        return f"{scheme}://{parsed.netloc}{path}"
+        return validate_gateway_id(f"dentalmotion-gateway-{secrets.token_hex(3)}")
 
     def start(self) -> None:
         if self._server is not None:
             return
         self._server = make_server(self.host, self.port, self.app, threaded=True)
-        self._thread = threading.Thread(target=self._server.serve_forever, name="newhorizons-gateway-web", daemon=True)
+        self._thread = threading.Thread(target=self._server.serve_forever, name="dentalmotion-gateway-web", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:

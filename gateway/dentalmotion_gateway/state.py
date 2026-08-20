@@ -135,7 +135,7 @@ class GatewayState:
                 # and JSON status).  Never let it overwrite a known mode, otherwise
                 # the WebUI flickers between maintenance and normal.
                 "mode": device.get("mode") or "normal",
-                "protocol": payload.get("protocol") or device.get("protocol", "NHO/Arduino/1"),
+                "protocol": payload.get("protocol") or device.get("protocol", "DentalMotion/1"),
                 "hardware_model": payload.get("hardware_model") or device.get("hardware_model", ""),
                 "firmware_version": payload.get("firmware_version") or device.get("firmware_version", ""),
                 "transport_path": payload.get("transport_path") or "arduino_heartbeat",

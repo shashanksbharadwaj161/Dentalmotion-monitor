@@ -8,18 +8,13 @@ from pathlib import Path
 from typing import Any
 
 
-PRODUCTION_URL = "wss://isensing-s1.u-aizu.ac.jp/newhorizons/gateway/ws"
-LOCAL_URL = "ws://127.0.0.1:5051/newhorizons/gateway/ws"
 GATEWAY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": False,
-    "gateway_name": "New Horizons Gateway",
+    "gateway_name": "DentalMotion Gateway",
     "gateway_id": "",
-    "target_mode": "production",
-    "manual_url": "",
-    "server_url": PRODUCTION_URL,
     "listen_udp_host": "0.0.0.0",
     "listen_udp_port": 13250,
     "listen_discovery_host": "0.0.0.0",
@@ -57,7 +52,7 @@ class GatewayConfigStore:
     """
 
     def __init__(self, path: str | None = None) -> None:
-        self.path = Path(path or os.getenv("NEWHORIZONS_GATEWAY_CONFIG", "gateway_config.json"))
+        self.path = Path(path or os.getenv("DENTALMOTION_GATEWAY_CONFIG", "gateway_config.json"))
         self.config = self._load()
 
     def _load(self) -> dict[str, Any]:
@@ -72,28 +67,22 @@ class GatewayConfigStore:
 
     def _apply_env(self, config: dict[str, Any]) -> None:
         env_map = {
-            "NEWHORIZONS_GATEWAY_TARGET_MODE": "target_mode",
-            "NEWHORIZONS_GATEWAY_MANUAL_URL": "manual_url",
-            "NEWHORIZONS_GATEWAY_UDP_HOST": "listen_udp_host",
-            "NEWHORIZONS_GATEWAY_UDP_PORT": "listen_udp_port",
-            "NEWHORIZONS_GATEWAY_DISCOVERY_HOST": "listen_discovery_host",
-            "NEWHORIZONS_GATEWAY_DISCOVERY_PORT": "listen_discovery_port",
-            "NEWHORIZONS_GATEWAY_WEB_HOST": "listen_web_host",
-            "NEWHORIZONS_GATEWAY_WEB_PORT": "listen_web_port",
-            "NEWHORIZONS_GATEWAY_DISCOVERY_ENABLED": "discovery_enabled",
-            "NEWHORIZONS_GATEWAY_DISCOVERY_PRIORITY": "discovery_priority",
-            "NEWHORIZONS_GATEWAY_ID": "gateway_id",
-            "NEWHORIZONS_GATEWAY_ENABLED": "enabled",
-            "NEWHORIZONS_GATEWAY_NAME": "gateway_name",
+            "DENTALMOTION_GATEWAY_UDP_HOST": "listen_udp_host",
+            "DENTALMOTION_GATEWAY_UDP_PORT": "listen_udp_port",
+            "DENTALMOTION_GATEWAY_DISCOVERY_HOST": "listen_discovery_host",
+            "DENTALMOTION_GATEWAY_DISCOVERY_PORT": "listen_discovery_port",
+            "DENTALMOTION_GATEWAY_WEB_HOST": "listen_web_host",
+            "DENTALMOTION_GATEWAY_WEB_PORT": "listen_web_port",
+            "DENTALMOTION_GATEWAY_DISCOVERY_ENABLED": "discovery_enabled",
+            "DENTALMOTION_GATEWAY_DISCOVERY_PRIORITY": "discovery_priority",
+            "DENTALMOTION_GATEWAY_ID": "gateway_id",
+            "DENTALMOTION_GATEWAY_ENABLED": "enabled",
+            "DENTALMOTION_GATEWAY_NAME": "gateway_name",
         }
         for env_name, key in env_map.items():
             value = os.getenv(env_name)
             if value not in (None, ""):
                 config[key] = value
-        server_url = os.getenv("NEWHORIZONS_GATEWAY_SERVER_URL")
-        if server_url:
-            config["target_mode"] = os.getenv("NEWHORIZONS_GATEWAY_TARGET_MODE") or "manual"
-            config["manual_url"] = server_url
 
     def _normalize(self, config: dict[str, Any]) -> None:
         for key in ("listen_udp_port", "listen_discovery_port", "listen_web_port", "discovery_priority"):
@@ -104,23 +93,9 @@ class GatewayConfigStore:
         if config["gateway_id"] and not GATEWAY_ID_PATTERN.fullmatch(config["gateway_id"]):
             config["gateway_id"] = ""
             config["enabled"] = False
-        config["target_mode"] = str(config.get("target_mode") or "production")
-        if config["target_mode"] not in ("production", "local", "manual"):
-            config["target_mode"] = "production"
-        config.pop("auth_token", None)
         if not isinstance(config.get("denied_devices"), list):
             config["denied_devices"] = []
         config["denied_devices"] = sorted({str(uid).strip().upper() for uid in config["denied_devices"] if str(uid).strip()})
-        config["server_url"] = self.resolve_server_url(config)
-
-    @staticmethod
-    def resolve_server_url(config: dict[str, Any]) -> str:
-        mode = str(config.get("target_mode") or "production")
-        if mode == "local":
-            return LOCAL_URL
-        if mode == "manual":
-            return str(config.get("manual_url") or "").strip() or LOCAL_URL
-        return PRODUCTION_URL
 
     def snapshot(self) -> dict[str, Any]:
         return dict(self.config)

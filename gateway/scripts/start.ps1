@@ -53,7 +53,7 @@ function Assert-PortFree {
             Select-Object -ExpandProperty ProcessName -Unique
     )
     if (($Names -join " ") -match "docker") {
-        throw "Legacy Docker Gateway is still using $Protocol/$Port. Stop and remove the old newhorizons-gateway container before starting the host-only Gateway."
+        throw "Legacy Docker Gateway is still using $Protocol/$Port. Stop and remove the old dentalmotion-gateway container before starting the host-only Gateway."
     }
     throw "$Protocol/$Port is already in use by: $($Names -join ', ')"
 }
@@ -82,10 +82,10 @@ Set-Content -Path $LogFile -Value ""
 Set-Content -Path $ErrFile -Value ""
 
 $env:PYTHONUNBUFFERED = "1"
-$env:NEWHORIZONS_GATEWAY_APP_ROOT = $AppDir
-$env:NEWHORIZONS_GATEWAY_RESTART_COMMAND = "powershell -File `"$ScriptDir\start.ps1`""
+$env:DENTALMOTION_GATEWAY_APP_ROOT = $AppDir
+$env:DENTALMOTION_GATEWAY_RESTART_COMMAND = "powershell -File `"$ScriptDir\start.ps1`""
 $Process = Start-Process -FilePath $PythonBin `
-    -ArgumentList @("-m", "newhorizons_gateway.main", "--config", $ConfigFile) `
+    -ArgumentList @("-m", "dentalmotion_gateway.main", "--config", $ConfigFile) `
     -WorkingDirectory $AppDir `
     -RedirectStandardOutput $LogFile `
     -RedirectStandardError $ErrFile `
