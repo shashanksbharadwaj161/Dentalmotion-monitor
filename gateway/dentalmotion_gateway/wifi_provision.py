@@ -149,7 +149,15 @@ def provision_board(target_ssid: str, target_password: str, board_ap_ssid: str |
             # board's open setup AP) right after disconnecting.
             _run(["netsh", "wlan", "disconnect", f"interface={interface}"])
             time.sleep(1.5)
-            candidates = find_setup_networks(interface)
+            # A single scan right after disconnecting sometimes returns a
+            # stale/empty list before Windows has actually refreshed it -
+            # retry a few times rather than giving up after one attempt.
+            candidates: list[str] = []
+            for _attempt in range(6):
+                candidates = find_setup_networks(interface)
+                if candidates:
+                    break
+                time.sleep(2.0)
             if not candidates:
                 raise ProvisioningError("no_setup_network_found")
             target_board_ssid = candidates[0]

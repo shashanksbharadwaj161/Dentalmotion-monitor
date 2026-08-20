@@ -286,7 +286,14 @@ def net_provision() -> Response:
         result = _gw_request("POST", "/api/provision", {"ssid": ssid, "password": password}, timeout=45)
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode() if hasattr(exc, "read") else str(exc)
-        return jsonify({"ok": False, "error": "provision_failed", "detail": raw}), 502
+        try:
+            detail = json.loads(raw)
+        except Exception:
+            detail = {}
+        # Surface the gateway's actual error code (e.g. no_setup_network_found)
+        # instead of a generic one, so the frontend's error map can show the
+        # real reason.
+        return jsonify({"ok": False, "error": detail.get("error") or "provision_failed", "detail": raw}), 502
     except Exception as exc:
         return jsonify({"ok": False, "error": "gateway_unreachable", "detail": str(exc)}), 502
     return jsonify(result)
