@@ -88,6 +88,9 @@ pip install -r gateway\requirements.txt -r imu_viewer\requirements.txt
 2. Switch the glove on using the power switch on the board
 3. The LED will blink while it connects to WiFi — wait until it stays solid (about 10–15 seconds)
 
+> First time using this glove, or LED blinking **blue** instead? It doesn't have WiFi credentials yet —
+> see **Section 6** below to set it up with your phone (one-time, takes under a minute).
+
 ---
 
 ### Step 4 — Start the Dashboard
@@ -183,41 +186,30 @@ Manage the glove's WiFi connection. Use this tab when:
 
 ---
 
-## Section 6 — Changing the WiFi Network
+## Section 6 — Changing the WiFi Network (or first-time setup)
 
-Use this when the clinic or hospital WiFi changes (new network name, new password, moved to a different building).
+Use this the first time you power on a glove, or whenever the clinic/hospital WiFi changes (new network name,
+new password, moved to a different building). WiFi credentials are handed to the glove over **Bluetooth from
+your phone** — the laptop running the dashboard never has to join the glove's network itself, so there's
+nothing for a locked-down or managed Windows laptop to get wrong here.
 
-### Method A — Via the Dashboard (Use this first)
+You will need: **a phone** (iOS or Android) with the free **"ESP BLE Provisioning"** app installed
+(published by Espressif Systems — search for it by name in the App Store / Play Store).
 
-*Works when the glove is already connected and showing data.*
-
-1. Open the **Network** tab
-2. Under **Change WiFi Credentials**, enter the new network name in the **Network Name (SSID)** field
-3. Enter the password (click 👁 to see what you are typing)
-4. Click **Apply & Reboot Board**
-5. A countdown timer will appear — the glove is saving the credentials and restarting
-6. After the countdown, connect this laptop to the new WiFi network
-7. Click **Rediscover Board** — the glove should reconnect within 10 seconds
-
----
-
-### Method B — Hardware Recovery
-
-*Use this when the glove cannot connect to any network (e.g., moved to a completely new location).*
-
-You will need: **any phone, tablet, or laptop with WiFi**
-
-1. **Power off** the glove completely
-2. **Hold the BOOT button** — a small button on the sensor board labeled BOOT
-3. While holding BOOT, **power the glove back on**
-4. Keep holding BOOT for **3 seconds** after it powers on, then release
-5. The glove creates a temporary WiFi network named **`DentalMotion-Setup-3CDC75`** (no password)
-6. On your phone or another laptop, **connect to `DentalMotion-Setup-3CDC75`**
-7. Open a browser and go to: **http://192.168.4.1**
-8. A setup page appears — type the new WiFi name and password, then click Save
-9. The glove restarts and joins the new network
-10. Switch your phone back to the regular WiFi
-11. On this PC, go to the **Network** tab → click **Rediscover Board**
+1. Put the glove into setup mode — the status LED starts blinking **blue** once it's in this mode. (A freshly
+   unboxed glove starts in this mode automatically on first power-on.) Two ways to trigger it:
+   - **Hold the BOOT button while powering on** (recommended — instant and reliable).
+   - Or: power the glove off, then on, five times in a row quickly (each within a few seconds of the last), no
+     buttons held. This works too, but a very fast switch flip can occasionally fail to fully power the board
+     down, silently skipping a cycle — if it doesn't go blue after 5 tries, use the BOOT button method instead.
+2. On your phone, open **ESP BLE Provisioning** → tap **Provision New Device** → **I don't have a QR code**.
+3. From the list of nearby Bluetooth devices, select the one named **`PROV_<device id>`** — the device ID is
+   the 12-character code printed on the glove (e.g. `PROV_3CDC75413DE8`).
+4. When asked for the **Proof of Possession**, enter: **`dentalmotion`**
+5. Pick the clinic/lab WiFi network from the list (or type the name manually) and enter its password.
+6. Tap **Provision** — the app confirms success, and the glove restarts and joins the network on its own
+   (LED goes solid green once it's streaming).
+7. Back on this PC, open the dashboard's **Network** tab → click **Rediscover Board**.
 
 ---
 

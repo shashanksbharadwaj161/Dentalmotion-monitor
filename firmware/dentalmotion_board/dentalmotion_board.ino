@@ -12,8 +12,7 @@
 // Library:  Arduino_BMI270_BMM150 (Library Manager), ArduinoJson (Library Manager)
 
 #include <WiFi.h>
-#include <WebServer.h>
-#include <DNSServer.h>
+#include <WiFiProv.h>
 #include <WiFiUdp.h>
 #include <Preferences.h>
 #include <Wire.h>
@@ -44,14 +43,28 @@ static const uint32_t FINDME_INTERVAL_MS     = 3000;
 // this board has no silkscreen/datasheet reference for it, just "SYS").
 static const uint8_t  LED_PIN = 11;
 static const uint8_t  BOOT_CYCLES_FOR_DISCOVERY = 5;    // power off/on this many times fast
-static const uint32_t BOOT_COUNTER_RESET_MS     = 8000; // ...within this long a window each time
+static const uint32_t BOOT_COUNTER_RESET_MS     = 20000; // ...within this long a window each time
+
+// Alternate, deterministic way to force setup mode: hold the BOOT button
+// (GPIO0, same pin esptool uses for download mode) while powering on. Far
+// more reliable than counting power cycles by hand — a quick switch flip may
+// not fully discharge the board's decoupling cap, silently skipping a reset.
+static const uint8_t  BOOT_BUTTON_PIN = 0;
+
+// BLE WiFi provisioning (Espressif "ESP BLE Provisioning" app). This is the
+// only supported setup path — it hands WiFi credentials to the board over
+// Bluetooth from a phone, so the computer running the gateway never needs to
+// join the board's network itself (Windows WiFi-switching is unreliable
+// enough on managed/locked-down machines that this used to be the main
+// support headache). Proof-of-possession PIN is fixed and documented in the
+// README; it isn't a real secret, just what the official app requires you
+// to type in before it will send credentials.
+static const char* BLE_PROV_POP = "dentalmotion";
 
 // ---------------------------------------------------------------------------
 // Globals
 // ---------------------------------------------------------------------------
 Preferences prefs;
-WebServer portalServer(80);
-DNSServer dnsServer;
 WiFiUDP findmeUdp;
 WiFiUDP streamUdp;
 Adafruit_NeoPixel statusLed(1, LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -89,10 +102,8 @@ unsigned long lastFindmeMs = 0;
 // ---------------------------------------------------------------------------
 void computeUid();
 IPAddress broadcastAddressForCurrentSubnet();
-void handlePortalRoot();
-void handlePortalSave();
-void handlePortalRedirect();
-void startSetupAp();
+void startBleProvisioning();
+void sysProvEvent(arduino_event_t* sysEvent);
 void sendFindmeDiscover(const char* currentGatewayId);
 void serviceFindme();
 void writeHeader(uint8_t* out, uint8_t flags, uint16_t payloadLen);
@@ -158,88 +169,63 @@ IPAddress broadcastAddressForCurrentSubnet() {
 }
 
 // ---------------------------------------------------------------------------
-// Captive-portal SoftAP (WiFi setup) — only used when no credentials stored,
-// or the stored credentials failed to connect.
+// BLE WiFi provisioning (Espressif "ESP BLE Provisioning" app) — only used
+// when no credentials are stored, or the stored credentials failed to
+// connect. Credentials arrive over Bluetooth from a phone; the computer
+// running the gateway never has to join the board's network, so there's
+// nothing for a locked-down/managed Windows machine to get wrong.
 // ---------------------------------------------------------------------------
-const char PORTAL_HTML_HEAD[] PROGMEM =
-  "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
-  "<title>DentalMotion Setup</title><style>"
-  "body{font-family:sans-serif;max-width:420px;margin:24px auto;padding:0 16px}"
-  "h1{font-size:20px}label{display:block;margin-top:12px;font-size:14px}"
-  "input,select{width:100%;padding:8px;font-size:16px;box-sizing:border-box;margin-top:4px}"
-  "button{margin-top:18px;width:100%;padding:12px;font-size:16px;background:#2563eb;color:#fff;border:0;border-radius:6px}"
-  "</style></head><body><h1>DentalMotion Monitor WiFi Setup</h1>"
-  "<form method='POST' action='/save'>"
-  "<label>Network</label><select name='ssid_select' onchange=\"document.getElementById('ssid').value=this.value\">";
-
-const char PORTAL_HTML_TAIL[] PROGMEM =
-  "</select>"
-  "<label>SSID</label><input type='text' name='ssid' id='ssid' required>"
-  "<label>Password</label><input type='password' name='password'>"
-  "<button type='submit'>Save &amp; Connect</button>"
-  "</form></body></html>";
-
-void handlePortalRoot() {
-  String html;
-  html.reserve(2048);
-  html += FPSTR(PORTAL_HTML_HEAD);
-  html += "<option value=''>-- scan --</option>";
-  int n = WiFi.scanComplete();
-  if (n < 0) {
-    WiFi.scanNetworks(true);
-  } else {
-    for (int i = 0; i < n; i++) {
-      html += "<option value='" + WiFi.SSID(i) + "'>" + WiFi.SSID(i) + "</option>";
+void sysProvEvent(arduino_event_t* sysEvent) {
+  switch (sysEvent->event_id) {
+    case ARDUINO_EVENT_PROV_START:
+      ledMode = LED_MODE_SETUP;
+      break;
+    case ARDUINO_EVENT_PROV_CRED_RECV: {
+      const char* ssid = (const char*)sysEvent->event_info.prov_cred_recv.ssid;
+      const char* password = (const char*)sysEvent->event_info.prov_cred_recv.password;
+      prefs.putString("ssid", ssid);
+      prefs.putString("pass", password);
+      break;
     }
+    case ARDUINO_EVENT_PROV_CRED_FAIL:
+      // Bad credentials or connect timeout — provisioning manager keeps the
+      // BLE session open so the user can retry from the app; nothing to do
+      // here beyond leaving the LED on LED_MODE_SETUP.
+      break;
+    case ARDUINO_EVENT_PROV_END:
+      // Provisioning session is over, one way or another. Reboot into the
+      // normal connectToStoredWifi() path so success/failure is handled the
+      // same way regardless of how the board got here.
+      delay(300);
+      ESP.restart();
+      break;
+    default:
+      break;
   }
-  html += FPSTR(PORTAL_HTML_TAIL);
-  portalServer.send(200, "text/html", html);
 }
 
-void handlePortalSave() {
-  String ssid = portalServer.arg("ssid");
-  String password = portalServer.arg("password");
-  if (ssid.length() == 0) {
-    portalServer.send(400, "text/plain", "ssid required");
-    return;
-  }
-  prefs.putString("ssid", ssid);
-  prefs.putString("pass", password);
-  portalServer.send(200, "text/html",
-    "<html><body><h3>Saved. Rebooting onto your network...</h3></body></html>");
-  delay(500);
-  ESP.restart();
-}
-
-void handlePortalRedirect() {
-  portalServer.sendHeader("Location", "http://192.168.4.1/", true);
-  portalServer.send(302, "text/plain", "");
-}
-
-void startSetupAp() {
+void startBleProvisioning() {
   setupMode = true;
   ledMode = LED_MODE_SETUP;
-  apName = String("DentalMotion-Setup-") + uidHex;
+  apName = String("PROV_") + uidHex;
 
-  WiFi.mode(WIFI_AP);
-  IPAddress apIp(192, 168, 4, 1);
-  IPAddress apMask(255, 255, 255, 0);
-  WiFi.softAPConfig(apIp, apIp, apMask);
-  WiFi.softAP(apName.c_str());
-  WiFi.scanNetworks(true); // kick off async scan for the portal's network list
+  // Fixed, arbitrary UUID for the provisioning BLE service — only needs to
+  // be consistent per firmware build, the app doesn't care what it is.
+  uint8_t uuid[16] = {
+    0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
+    0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02,
+  };
 
-  dnsServer.start(53, "*", apIp);
-
-  portalServer.on("/", HTTP_GET, handlePortalRoot);
-  portalServer.on("/portal", HTTP_GET, handlePortalRoot);
-  portalServer.on("/hotspot-detect.html", HTTP_GET, handlePortalRoot);
-  portalServer.on("/save", HTTP_POST, handlePortalSave);
-  portalServer.on("/generate_204", HTTP_GET, handlePortalRedirect);
-  portalServer.on("/gen_204", HTTP_GET, handlePortalRedirect);
-  portalServer.on("/connecttest.txt", HTTP_GET, handlePortalRedirect);
-  portalServer.on("/ncsi.txt", HTTP_GET, handlePortalRedirect);
-  portalServer.onNotFound(handlePortalRedirect);
-  portalServer.begin();
+  WiFi.onEvent(sysProvEvent);
+  // WIFI_PROV_SCHEME_HANDLER_NONE: skip the "release unused BT controller
+  // memory" step. FREE_BLE/FREE_BTDM both crash on this chip
+  // (ESP_ERROR_CHECK abort in esp_bt_controller_mem_release, ESP_FAIL) —
+  // the ESP32-S3 apparently doesn't like this memory-reclaim path, at
+  // least on core 2.0.9. Not worth the RAM savings; plenty of headroom.
+  WiFiProv.beginProvision(
+    WIFI_PROV_SCHEME_BLE, WIFI_PROV_SCHEME_HANDLER_NONE,
+    WIFI_PROV_SECURITY_1, BLE_PROV_POP, apName.c_str(),
+    nullptr, uuid);
 }
 
 // ---------------------------------------------------------------------------
@@ -451,6 +437,34 @@ bool connectToStoredWifi() {
 void setup() {
   Serial.begin(115200);
 
+  // Boot-cycle counting happens FIRST, before anything slow (IMU init in
+  // particular can take a noticeable moment) — a fast power-switch flip
+  // needs this saved to NVS within the first few milliseconds of boot, or a
+  // quick-enough flip can cut power again before the increment ever
+  // persists, silently dropping that cycle from the count.
+  WiFi.mode(WIFI_STA);
+  computeUid();
+  prefs.begin("wifi", false);
+
+  // Primary "force setup mode" trigger: hold the BOOT button while powering
+  // on. GPIO0 — same pin esptool uses for download mode.
+  pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
+  bool bootHeldAtPowerOn = (digitalRead(BOOT_BUTTON_PIN) == LOW);
+
+  // Secondary trigger, kept for boards/cases where holding BOOT isn't handy:
+  // power the board off/on this many times, each within BOOT_COUNTER_RESET_MS
+  // of the last.
+  uint8_t bootCount = prefs.getUChar("bootcnt", 0) + 1;
+  bool forceSetupMode = false;
+  if (bootCount >= BOOT_CYCLES_FOR_DISCOVERY) {
+    bootCount = 0;
+    forceSetupMode = true;
+  }
+  prefs.putUChar("bootcnt", bootCount);
+
+  Serial.printf("[boot] uid=%s bootHeldAtPowerOn=%d bootCount=%u forceSetupMode=%d\n",
+                uidHex, bootHeldAtPowerOn, bootCount, forceSetupMode);
+
   statusLed.begin();
   statusLed.setBrightness(255);
   ledMode = LED_MODE_CONNECTING;
@@ -466,29 +480,12 @@ void setup() {
   }
   IMU.setContinuousMode();
 
-  WiFi.mode(WIFI_STA);
-  computeUid();
-
-  prefs.begin("wifi", false);
-
-  // Physical "discovery mode" trigger: power the board off/on this many
-  // times, each within BOOT_COUNTER_RESET_MS of the last, to force it back
-  // into setup-AP mode even if it already has working WiFi credentials
-  // stored — no BOOT button needed. Ordinary, spaced-out power cycles never
-  // accumulate: the counter is cleared after a few seconds of stable normal
-  // operation (see loop()).
-  uint8_t bootCount = prefs.getUChar("bootcnt", 0) + 1;
-  bool forceSetupMode = false;
-  if (bootCount >= BOOT_CYCLES_FOR_DISCOVERY) {
-    bootCount = 0;
-    forceSetupMode = true;
+  if (bootHeldAtPowerOn || forceSetupMode || !connectToStoredWifi()) {
+    Serial.println("[boot] entering BLE provisioning setup mode");
+    startBleProvisioning();
+    return; // BLE provisioning runs itself via WiFi.onEvent from here
   }
-  prefs.putUChar("bootcnt", bootCount);
-
-  if (forceSetupMode || !connectToStoredWifi()) {
-    startSetupAp();
-    return; // stay dumb: setup mode only services the portal until reboot
-  }
+  Serial.println("[boot] connected to stored WiFi, normal operation");
 
   ledMode = LED_MODE_WAITING;
   findmeUdp.begin(FINDME_PORT);
@@ -501,8 +498,9 @@ void loop() {
   serviceLed();
 
   if (setupMode) {
-    dnsServer.processNextRequest();
-    portalServer.handleClient();
+    // BLE provisioning is handled entirely by the ESP-IDF provisioning
+    // manager in the background (via sysProvEvent); nothing to poll here.
+    delay(50);
     return;
   }
 

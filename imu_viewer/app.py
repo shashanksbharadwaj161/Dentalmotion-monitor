@@ -40,19 +40,47 @@ FLAG_HEARTBEAT = 0x80
 IMU_FLOATS = 7   # ax ay az gx gy gz 0(reserved)
 
 # ── Shared state ─────────────────────────────────────────────────────────────
+# Per-device state, keyed by device UID — lets multiple boards stream
+# simultaneously without their samples getting interleaved into one stream.
 _lock = threading.Lock()
-_history: deque[dict[str, Any]] = deque(maxlen=MAX_HISTORY)
-_stats = {
-    "packets_received": 0,
-    "imu_samples": 0,
-    "last_uid": "",
-    "last_rx_ms": 0,
-    "recording": False,
-    "csv_path": "",
-    "csv_rows": 0,
-}
-_csv_file: Any = None
-_csv_writer: Any = None
+_devices: dict[str, dict[str, Any]] = {}       # uid -> {history, stats, csv_file, csv_writer}
+_device_order: list[str] = []                   # first-seen order, for "Board 1"/"Board 2" labels
+
+
+def _device(uid: str) -> dict[str, Any]:
+    """Get or create per-device state. Caller must hold _lock."""
+    dev = _devices.get(uid)
+    if dev is None:
+        dev = {
+            "history": deque(maxlen=MAX_HISTORY),
+            "stats": {
+                "packets_received": 0,
+                "imu_samples": 0,
+                "last_uid": uid,
+                "last_rx_ms": 0,
+                "recording": False,
+                "csv_path": "",
+                "csv_rows": 0,
+            },
+            "csv_file": None,
+            "csv_writer": None,
+        }
+        _devices[uid] = dev
+        _device_order.append(uid)
+    return dev
+
+
+DEVICE_LABELS = ["Yellow", "Pink", "Blue", "Green", "Orange", "Purple"]
+
+
+def _label_for(uid: str) -> str:
+    """Deterministic per-UID label — the same physical board always gets the
+    same color, regardless of connection order or how many times the app
+    restarts. (Not Python's built-in hash(): that's randomized per-process
+    unless PYTHONHASHSEED is fixed, which would make labels flip on every
+    restart — exactly what we're avoiding.)"""
+    checksum = sum(uid.encode("ascii", errors="replace"))
+    return DEVICE_LABELS[checksum % len(DEVICE_LABELS)]
 
 # ── Packet parser ─────────────────────────────────────────────────────────────
 
@@ -113,25 +141,25 @@ def _udp_worker() -> None:
 
         sample = _parse_packet(data)
         if sample is None:
-            with _lock:
-                _stats["packets_received"] += 1
-            continue
+            continue  # unparseable / heartbeat-only packet, no device UID to attribute it to
 
         with _lock:
-            _stats["packets_received"] += 1
-            _stats["imu_samples"] += 1
-            _stats["last_uid"] = sample["uid"]
-            _stats["last_rx_ms"] = int(time.time() * 1000)
-            _history.append(sample)
-            if _stats["recording"] and _csv_writer is not None:
-                _csv_writer.writerow([
+            dev = _device(sample["uid"])
+            stats = dev["stats"]
+            stats["packets_received"] += 1
+            stats["imu_samples"] += 1
+            stats["last_uid"] = sample["uid"]
+            stats["last_rx_ms"] = int(time.time() * 1000)
+            dev["history"].append(sample)
+            if stats["recording"] and dev["csv_writer"] is not None:
+                dev["csv_writer"].writerow([
                     datetime.fromtimestamp(sample["t"]).isoformat(),
                     sample["seq"],
                     sample["ax"], sample["ay"], sample["az"],
                     sample["gx"], sample["gy"], sample["gz"],
                 ])
-                _csv_file.flush()
-                _stats["csv_rows"] += 1
+                dev["csv_file"].flush()
+                stats["csv_rows"] += 1
 
 # ── Gateway helper ────────────────────────────────────────────────────────────
 
@@ -150,53 +178,109 @@ app = Flask(__name__)
 def index() -> str:
     return render_template("index.html", udp_port=UDP_PORT)
 
+def _selected_uid(args) -> str | None:
+    """Resolve which device a request is about: explicit ?uid= wins, else the
+    first live (recently-seen) device, else the first known device at all."""
+    uid = args.get("uid")
+    if uid:
+        return uid.upper()
+    with _lock:
+        now_ms = time.time() * 1000
+        for u in _device_order:
+            stats = _devices[u]["stats"]
+            if stats["last_rx_ms"] and now_ms - stats["last_rx_ms"] < 5000:
+                return u
+        return _device_order[0] if _device_order else None
+
+
+@app.get("/api/devices")
+def api_devices() -> Response:
+    """List every board this viewer has ever seen a packet from, in the
+    order first seen — that order is what "Board 1" / "Board 2" means."""
+    with _lock:
+        now_ms = time.time() * 1000
+        out = []
+        for uid in _device_order:
+            stats = _devices[uid]["stats"]
+            live = bool(stats["last_rx_ms"]) and (now_ms - stats["last_rx_ms"]) < 5000
+            out.append({
+                "uid": uid,
+                "label": _label_for(uid),
+                "live": live,
+                "last_rx_ms": stats["last_rx_ms"],
+                "recording": stats["recording"],
+            })
+    return jsonify({"devices": out})
+
+
 @app.get("/api/latest")
 def api_latest() -> Response:
     since = float(request.args.get("since", 0))
     limit = int(request.args.get("limit", 300))
+    uid = _selected_uid(request.args)
     with _lock:
-        samples = [s for s in _history if s["t"] > since]
-        stats = dict(_stats)
+        if uid is None:
+            samples: list[dict[str, Any]] = []
+            stats = {
+                "packets_received": 0, "imu_samples": 0, "last_uid": "",
+                "last_rx_ms": 0, "recording": False, "csv_path": "", "csv_rows": 0,
+            }
+        else:
+            dev = _device(uid)
+            samples = [s for s in dev["history"] if s["t"] > since]
+            stats = dict(dev["stats"])
     if limit:
         samples = samples[-limit:]
-    return jsonify({"samples": samples, "stats": stats})
+    return jsonify({"samples": samples, "stats": stats, "uid": uid, "label": _label_for(uid) if uid else None})
 
 @app.post("/api/record/start")
 def record_start() -> Response:
-    global _csv_file, _csv_writer
+    body = request.get_json(silent=True) or {}
+    uid = (body.get("uid") or request.args.get("uid") or "").upper() or _selected_uid(request.args)
+    if not uid:
+        return jsonify({"ok": False, "error": "no_device"})
     with _lock:
-        if _stats["recording"]:
+        dev = _device(uid)
+        stats = dev["stats"]
+        if stats["recording"]:
             return jsonify({"ok": False, "error": "already_recording"})
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        uid = _stats["last_uid"] or "unknown"
         path = DATA_DIR / f"imu_{uid}_{ts}.csv"
-        _csv_file = open(path, "w", newline="", encoding="utf-8")
-        _csv_writer = csv.writer(_csv_file)
-        _csv_writer.writerow(["timestamp", "seq", "ax", "ay", "az", "gx", "gy", "gz"])
-        _stats["recording"] = True
-        _stats["csv_path"] = str(path)
-        _stats["csv_rows"] = 0
-    return jsonify({"ok": True, "path": str(path)})
+        dev["csv_file"] = open(path, "w", newline="", encoding="utf-8")
+        dev["csv_writer"] = csv.writer(dev["csv_file"])
+        dev["csv_writer"].writerow(["timestamp", "seq", "ax", "ay", "az", "gx", "gy", "gz"])
+        stats["recording"] = True
+        stats["csv_path"] = str(path)
+        stats["csv_rows"] = 0
+    return jsonify({"ok": True, "path": str(path), "uid": uid})
 
 @app.post("/api/record/stop")
 def record_stop() -> Response:
-    global _csv_file, _csv_writer
+    body = request.get_json(silent=True) or {}
+    uid = (body.get("uid") or request.args.get("uid") or "").upper() or _selected_uid(request.args)
+    if not uid:
+        return jsonify({"ok": False, "error": "no_device"})
     with _lock:
-        if not _stats["recording"]:
+        dev = _device(uid)
+        stats = dev["stats"]
+        if not stats["recording"]:
             return jsonify({"ok": False, "error": "not_recording"})
-        _stats["recording"] = False
-        path = _stats["csv_path"]
-        rows = _stats["csv_rows"]
-        _csv_writer = None
-        if _csv_file:
-            _csv_file.close()
-            _csv_file = None
+        stats["recording"] = False
+        path = stats["csv_path"]
+        rows = stats["csv_rows"]
+        dev["csv_writer"] = None
+        if dev["csv_file"]:
+            dev["csv_file"].close()
+            dev["csv_file"] = None
     return jsonify({"ok": True, "path": path, "rows": rows})
 
 @app.get("/api/stats")
 def api_stats() -> Response:
+    uid = _selected_uid(request.args)
     with _lock:
-        return jsonify(dict(_stats))
+        if uid is None:
+            return jsonify({})
+        return jsonify(dict(_device(uid)["stats"]))
 
 @app.get("/api/recordings")
 def api_recordings() -> Response:
@@ -213,6 +297,7 @@ def api_recordings() -> Response:
 
 @app.get("/api/net/status")
 def net_status() -> Response:
+    uid = (request.args.get("uid") or "").upper() or DEVICE_UID
     try:
         gw = _gw_request("GET", "/api/status")
     except Exception as exc:
@@ -221,18 +306,18 @@ def net_status() -> Response:
     if isinstance(devices, dict):
         devices = list(devices.values())
     dev = next(
-        (d for d in devices if str(d.get("device_uid") or "").upper() == DEVICE_UID.upper()),
+        (d for d in devices if str(d.get("device_uid") or "").upper() == uid.upper()),
         None,
     )
     with _lock:
-        uid = _stats["last_uid"]
-        rx  = _stats["last_rx_ms"]
-    live = uid.upper() == DEVICE_UID.upper() and rx > 0 and (time.time() * 1000 - rx) < 5000
+        stats = _devices.get(uid, {}).get("stats") or {}
+        rx = stats.get("last_rx_ms", 0)
+    live = rx > 0 and (time.time() * 1000 - rx) < 5000
     if dev is None:
-        return jsonify({"ok": False, "error": "device_not_found", "viewer_live": live}), 404
+        return jsonify({"ok": False, "error": "device_not_found", "viewer_live": live, "uid": uid}), 404
     return jsonify({
         "ok":               True,
-        "uid":              DEVICE_UID,
+        "uid":              uid,
         "viewer_live":      live,
         "mode":             dev.get("mode"),
         "wifi_rssi":        dev.get("wifi_rssi"),
@@ -247,11 +332,12 @@ def net_wifi() -> Response:
     body     = request.get_json(silent=True) or {}
     ssid     = str(body.get("ssid") or "").strip()
     password = str(body.get("password") or "")
+    uid      = str(body.get("uid") or "").upper() or DEVICE_UID
     if not ssid:
         return jsonify({"ok": False, "error": "ssid_required"}), 400
     try:
         r1 = _gw_request(
-            "POST", f"/api/devices/{DEVICE_UID}/cmd",
+            "POST", f"/api/devices/{uid}/cmd",
             {"command": "set_wifi", "ssid": ssid, "password": password},
         )
     except urllib.error.HTTPError as exc:
@@ -262,7 +348,7 @@ def net_wifi() -> Response:
         return jsonify({"ok": False, "error": "set_wifi_failed", "set_wifi": r1}), 502
     time.sleep(1)
     try:
-        r2 = _gw_request("POST", f"/api/devices/{DEVICE_UID}/cmd", {"command": "reboot"})
+        r2 = _gw_request("POST", f"/api/devices/{uid}/cmd", {"command": "reboot"})
     except Exception as exc:
         return jsonify({"ok": False, "error": "reboot_failed", "set_wifi": r1, "detail": str(exc)}), 502
     return jsonify({"ok": True, "set_wifi": r1, "reboot": r2})
@@ -310,13 +396,15 @@ def net_provision_scan() -> Response:
 
 @app.post("/api/net/rediscover")
 def net_rediscover() -> Response:
+    body = request.get_json(silent=True) or {}
+    uid = str(body.get("uid") or request.args.get("uid") or "").upper() or DEVICE_UID
     try:
         r1 = _gw_request("POST", "/api/discover")
     except Exception as exc:
         return jsonify({"ok": False, "error": "gateway_unreachable", "detail": str(exc)}), 502
     time.sleep(5)
     try:
-        r2 = _gw_request("POST", f"/api/devices/{DEVICE_UID}/serve")
+        r2 = _gw_request("POST", f"/api/devices/{uid}/serve")
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode() if hasattr(exc, "read") else str(exc)
         return jsonify({"ok": False, "error": "serve_failed", "discover": r1, "detail": raw}), 502

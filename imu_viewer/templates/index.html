@@ -143,6 +143,7 @@ code.tag { background:var(--panel2); padding:1px 5px; border-radius:4px; font-si
 
 <header>
   <h1>DentalMotion Monitor – IMU Live View</h1>
+  <select id="board-select" style="padding:5px 10px;font-size:12px;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:inherit"></select>
   <span class="pill" id="conn-pill">no data</span>
   <span class="uid-mono" id="uid-badge"></span>
   <span class="port-label">UDP :{{ udp_port }}</span>
@@ -708,6 +709,91 @@ function pushMagChart(win) {
   magChart.update('none');
 }
 
+// ── Board selection (multi-device support) ────────────────────────────
+var selectedUid = null; // null = let the backend pick (first live device)
+var deviceLabels = {}; // uid -> label, kept in sync with refreshDeviceList
+
+var LABEL_COLORS = {
+  Yellow: '#eab308', Pink: '#ec4899', Blue: '#3b82f6',
+  Green: '#22c55e', Orange: '#f97316', Purple: '#a855f7',
+};
+function colorFor(label) { return LABEL_COLORS[label] || '#5a6380'; }
+// Readable text color against each swatch — the light ones need dark text.
+var LIGHT_LABELS = { Yellow: 1, Pink: 1 };
+function textColorFor(label) { return LIGHT_LABELS[label] ? '#000' : '#fff'; }
+
+function uidParam() {
+  return selectedUid ? '&uid=' + encodeURIComponent(selectedUid) : '';
+}
+
+function paintSelectedSwatch() {
+  var sel = document.getElementById('board-select');
+  var label = deviceLabels[selectedUid];
+  if (label) {
+    sel.style.background = colorFor(label);
+    sel.style.color = textColorFor(label);
+    sel.style.borderColor = colorFor(label);
+    sel.style.fontWeight = '700';
+  } else {
+    sel.style.background = 'var(--panel2)';
+    sel.style.color = 'var(--text)';
+    sel.style.borderColor = 'var(--border)';
+    sel.style.fontWeight = '500';
+  }
+}
+
+async function refreshDeviceList() {
+  try {
+    var res = await fetch('/api/devices');
+    var data = await res.json();
+    var devices = data.devices || [];
+    var sel = document.getElementById('board-select');
+    var prevValue = sel.value;
+
+    if (devices.length === 0) {
+      sel.innerHTML = '<option value="">No boards seen yet</option>';
+      return;
+    }
+
+    deviceLabels = {};
+    sel.innerHTML = '';
+    devices.forEach(function(d) {
+      deviceLabels[d.uid] = d.label;
+      var opt = document.createElement('option');
+      opt.value = d.uid;
+      opt.textContent = (d.live ? '● ' : '○ ') + d.label + ' (' + d.uid + ')';
+      opt.style.background = colorFor(d.label);
+      opt.style.color = textColorFor(d.label);
+      sel.appendChild(opt);
+    });
+
+    // Keep the user's selection if that board still exists; otherwise fall
+    // back to the first live one, or just the first board.
+    var stillExists = devices.some(function(d) { return d.uid === prevValue; });
+    if (stillExists && prevValue) {
+      sel.value = prevValue;
+      selectedUid = prevValue;
+    } else {
+      var firstLive = devices.find(function(d) { return d.live; });
+      selectedUid = (firstLive || devices[0]).uid;
+      sel.value = selectedUid;
+    }
+    paintSelectedSwatch();
+  } catch(e) {
+    // network blip — ignore, keep showing the last known list
+  }
+}
+
+document.getElementById('board-select').addEventListener('change', function(e) {
+  selectedUid = e.target.value || null;
+  pollLastT = 0;
+  hzBucket = [];
+  paintSelectedSwatch();
+});
+
+refreshDeviceList();
+setInterval(refreshDeviceList, 2000);
+
 // ── Polling ─────────────────────────────────────────────────────────
 var POLL_MS   = 50;
 var DISP_WIN  = 12;
@@ -716,7 +802,7 @@ var hzBucket  = [];
 
 async function poll() {
   try {
-    var res = await fetch('/api/latest?since=' + pollLastT + '&limit=300');
+    var res = await fetch('/api/latest?since=' + pollLastT + '&limit=300' + uidParam());
     var data = await res.json();
     var samples = data.samples;
     var stats   = data.stats;
@@ -737,7 +823,13 @@ async function poll() {
     if (!stats.last_rx_ms)  { pill.textContent='no data'; pill.className='pill'; }
     else if (age < 3000)    { pill.textContent='live';    pill.className='pill ok'; }
     else                    { pill.textContent='stale';   pill.className='pill warn'; }
-    if (stats.last_uid) document.getElementById('uid-badge').textContent = stats.last_uid;
+    if (stats.last_uid) {
+      var uidBadge = document.getElementById('uid-badge');
+      var label = deviceLabels[stats.last_uid];
+      uidBadge.textContent = label ? (label + ' — ' + stats.last_uid) : stats.last_uid;
+      uidBadge.style.color = label ? colorFor(label) : 'var(--muted)';
+      uidBadge.style.fontWeight = label ? '700' : 'normal';
+    }
 
     document.getElementById('stat-pkts').textContent = stats.packets_received.toLocaleString();
     document.getElementById('stat-imu').textContent  = stats.imu_samples.toLocaleString();
@@ -745,7 +837,7 @@ async function poll() {
 
     // Update charts only when tab is visible
     if (document.getElementById('panel-charts').classList.contains('active')) {
-      var res2   = await fetch('/api/latest?limit=' + (DISP_WIN * 120));
+      var res2   = await fetch('/api/latest?limit=' + (DISP_WIN * 120) + uidParam());
       var data2  = await res2.json();
       var win    = data2.samples;
       if (win.length > 1) {
@@ -760,14 +852,31 @@ async function poll() {
 }
 
 // Feature D – start/stop polling helpers
+//
+// Deliberately NOT setInterval: with two boards streaming at once the
+// backend occasionally takes a bit longer than POLL_MS to answer, and
+// setInterval keeps firing regardless — overlapping fetches can then land
+// out of order, so a stale response arrives after a fresher one and briefly
+// snaps the display backward (the "glitching" this was causing). Chaining
+// setTimeout after each poll() *completes* guarantees only one request is
+// ever in flight, so there's nothing left to race.
+var pollTimer = null;
+
+function scheduleNextPoll() {
+  pollTimer = setTimeout(function() {
+    poll().finally(scheduleNextPoll);
+  }, POLL_MS);
+}
+
 function startPolling() {
   if (pollInterval) return;
-  pollInterval = setInterval(poll, POLL_MS);
-  poll();
+  pollInterval = true;
+  scheduleNextPoll();
 }
 
 function stopPolling() {
-  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  pollInterval = null;
 }
 
 startPolling();
@@ -816,7 +925,11 @@ var recStatus = document.getElementById('rec-status');
 
 btnStart.addEventListener('click', async function() {
   btnStart.disabled = true;
-  var d = await (await fetch('/api/record/start', { method:'POST' })).json();
+  var d = await (await fetch('/api/record/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid: selectedUid }),
+  })).json();
   if (d.ok) {
     btnStop.disabled = false;
     recStatus.textContent = '● Recording → ' + d.path.split(/[\\/]/).pop();
@@ -829,7 +942,11 @@ btnStart.addEventListener('click', async function() {
 
 btnStop.addEventListener('click', async function() {
   btnStop.disabled = true;
-  var d = await (await fetch('/api/record/stop', { method:'POST' })).json();
+  var d = await (await fetch('/api/record/stop', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid: selectedUid }),
+  })).json();
   btnStart.disabled = false;
   recStatus.textContent = d.ok
     ? 'Saved ' + d.rows.toLocaleString() + ' rows → ' + d.path.split(/[\\/]/).pop()
@@ -849,7 +966,7 @@ async function netRefreshStatus() {
   msgEl.textContent = 'Refreshing…';
   msgEl.style.color = 'var(--muted)';
   try {
-    var res = await fetch('/api/net/status');
+    var res = await fetch('/api/net/status?' + (selectedUid ? 'uid=' + encodeURIComponent(selectedUid) : ''));
     var d   = await res.json();
 
     if (!d.ok && d.error === 'gateway_unreachable') {
@@ -863,7 +980,7 @@ async function netRefreshStatus() {
       return;
     }
     if (!d.ok && d.error === 'device_not_found') {
-      document.getElementById('net-uid').textContent = '3CDC75413DE8';
+      document.getElementById('net-uid').textContent = d.uid || '—';
       netSetPill(document.getElementById('net-mode-pill'), 'not found', 'warn');
       document.getElementById('net-rssi').textContent = '—';
       netSetPill(document.getElementById('net-stream-pill'),
@@ -993,7 +1110,7 @@ document.getElementById('btn-net-apply').addEventListener('click', async functio
     var res = await fetch('/api/net/wifi', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ssid: ssid, password: password })
+      body: JSON.stringify({ ssid: ssid, password: password, uid: selectedUid })
     });
     var d = await res.json();
 
@@ -1035,7 +1152,11 @@ document.getElementById('btn-net-rediscover').addEventListener('click', async fu
   progEl.style.display = 'block';
 
   try {
-    var res = await fetch('/api/net/rediscover', { method: 'POST' });
+    var res = await fetch('/api/net/rediscover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uid: selectedUid }),
+    });
     var d   = await res.json();
     progEl.style.display = 'none';
 
