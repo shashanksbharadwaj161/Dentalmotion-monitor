@@ -1,0 +1,44 @@
+DentalMotion Monitor firmware - pre-compiled, ready to flash
+==============================================================
+
+These 3 files are the compiled firmware (esp32:esp32 core 2.0.9,
+BLE WiFi provisioning). No Arduino IDE / build toolchain needed -
+just esptool.
+
+1. Install esptool (one-time):
+     pip install esptool
+
+2. Identify the board's COM port (Windows Device Manager > Ports,
+   look for "Silicon Labs CP210x USB to UART Bridge").
+
+3. Put the board in download mode:
+     - Flip its power slide switch OFF
+     - Hold the BOOT button
+     - Flip the slide switch ON while still holding BOOT
+     - Keep holding ~3 seconds after power-on, then release
+   (On this board, unplugging/replugging USB alone does NOT reset
+   the chip - only the slide switch does. If esptool reports
+   "Wrong boot mode detected (0x14)", you didn't power-cycle via
+   the switch.)
+
+4. Flash (replace COMxx with the actual port):
+
+     python -m esptool --chip esp32s3 --port COMxx --baud 460800 ^
+       --before default-reset --after hard-reset write-flash -z ^
+       0x0     dentalmotion_board.ino.bootloader.bin ^
+       0x8000  dentalmotion_board.ino.partitions.bin ^
+       0x10000 dentalmotion_board.ino.bin
+
+5. If the board previously ran different/older firmware (e.g. the
+   original factory "New Horizons OS" firmware, or an earlier test
+   build), erase the whole chip first - otherwise a leftover OTA
+   slot pointer can make it silently boot the OLD firmware even
+   though the new write succeeded:
+
+     python -m esptool --chip esp32s3 --port COMxx --baud 460800 erase-flash
+
+   Then put it back in download mode (step 3) and repeat step 4.
+
+6. First boot: LED blinks blue (no WiFi saved yet). See the main
+   README.md, Section 6, for how to connect it to WiFi via the
+   "ESP BLE Provisioning" phone app.
