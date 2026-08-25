@@ -304,41 +304,29 @@ code.tag { background:var(--panel2); padding:1px 5px; border-radius:4px; font-si
 
   <!-- Card 1.5: First-time / new-board setup -->
   <div class="card" style="border-color:rgba(63,123,97,.35)">
-    <h2>Connect a New Board</h2>
+    <h2>Connect a New Board (Bluetooth Setup)</h2>
     <p style="font-size:13px;color:var(--muted);margin-bottom:14px">
-      For a board that has never been on WiFi before (or was moved to a new location).
-      Power the board on so it's broadcasting its own setup hotspot — the status LED
-      blinks <strong>blue</strong> while it's in this mode — then enter your WiFi
-      network's name and password below and click Connect. This computer will briefly
-      switch its own WiFi to the board's hotspot, hand it the credentials, and switch
-      back automatically — no need to do anything on a phone or visit any setup page
-      yourself.
+      For a board that has never been on WiFi before, or was moved to a new location.
+      WiFi credentials are handed to the board over Bluetooth from a phone — this computer
+      never has to join the board's own network, so there's nothing for it to get wrong here.
+      You'll need a phone with the free <strong>"ESP BLE Provisioning"</strong> app
+      (published by Espressif Systems — search by name in the App Store / Play Store).
     </p>
-    <div style="display:grid;gap:12px;max-width:480px">
-      <div>
-        <label for="prov-ssid" class="net-label">Your WiFi Network Name (SSID)</label>
-        <input id="prov-ssid" type="text" autocomplete="off" autocorrect="off"
-               autocapitalize="off" spellcheck="false" placeholder="HospitalWifi_5G">
-      </div>
-      <div>
-        <label for="prov-password" class="net-label">Password (leave blank for open networks)</label>
-        <div class="net-field-wrap">
-          <input id="prov-password" type="password" autocomplete="new-password"
-                 autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="••••••••">
-          <button id="btn-prov-show-pw" type="button" title="Show / hide password"
-                  style="padding:6px 12px;font-size:14px;flex-shrink:0">👁</button>
-        </div>
-      </div>
-    </div>
-    <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <button id="btn-prov-connect" class="primary">Connect Board</button>
-      <span id="prov-msg" style="font-size:12px"></span>
-    </div>
-    <p style="font-size:12px;color:var(--muted);margin-top:10px">
-      Board not broadcasting a setup hotspot? Power it fully off, then on, five times in a
-      row (each within a few seconds) — this forces it back into setup mode (blue blink),
-      even if it already has WiFi saved. No buttons to hold.
-    </p>
+    <ol class="net-guide">
+      <li>Put the board into setup mode — the status LED blinks <strong>blue</strong> once it's
+        in this mode. Either <strong>hold the BOOT button while powering on</strong> (fastest,
+        most reliable), or power it fully off then on five times in a row quickly, no buttons
+        held (a freshly unboxed board starts in this mode automatically).</li>
+      <li>On your phone, open <strong>ESP BLE Provisioning</strong> → <strong>Provision New Device</strong>
+        → <strong>I don't have a QR code</strong>.</li>
+      <li>From the nearby Bluetooth devices, select <code class="tag">PROV_&lt;device id&gt;</code> —
+        the 12-character code printed on the board.</li>
+      <li>When asked for the <strong>Proof of Possession</strong>, enter: <code class="tag">dentalmotion</code></li>
+      <li>Pick your WiFi network and enter its password, then tap <strong>Provision</strong>.</li>
+      <li>The board restarts and joins the network on its own — LED turns solid
+        <strong>green</strong> once it's streaming. Come back here and click
+        <strong>Rediscover Board</strong> below.</li>
+    </ol>
   </div>
 
   <!-- Card 2: WiFi credentials -->
@@ -394,29 +382,6 @@ code.tag { background:var(--panel2); padding:1px 5px; border-radius:4px; font-si
     </div>
   </div>
 
-  <!-- Card 4: AP Setup Mode guide -->
-  <div class="card" style="border-color:rgba(239,68,68,.35)">
-    <h2 style="color:var(--err)">Board Unreachable? Use AP Setup Mode</h2>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:12px">
-      If the board cannot connect to WiFi at all (wrong password, network unavailable),
-      or if "Connect a New Board" above can't find it, use manual AP setup mode.
-    </p>
-    <ol class="net-guide">
-      <li>Power the board fully off, then on, <strong>five times in a row</strong> (each within
-        a few seconds of the last) — no buttons to hold. The status LED starts blinking
-        <strong>blue</strong> once it's in setup mode. (Freshly unboxed boards start in this
-        mode automatically on first power-on.)</li>
-      <li>The board creates a WiFi access point named <code class="tag">DentalMotion-Setup-3CDC75</code> (no password).</li>
-      <li>Connect this computer or a phone to that access point.</li>
-      <li>Open a browser and go to <code class="tag">http://192.168.4.1</code></li>
-      <li>Enter the new WiFi SSID and password and save.</li>
-      <li>Board reboots, connects to the new network, and the LED turns solid <strong>green</strong>
-        once it's streaming. Return here and click <strong>Rediscover</strong>.</li>
-    </ol>
-    <p style="font-size:12px;color:var(--muted);margin-top:10px">
-      The setup page is served by the board firmware — not by this viewer.
-    </p>
-  </div>
 
 </div>
 
@@ -1025,68 +990,6 @@ document.getElementById('btn-net-show-pw').addEventListener('click', function() 
   this.textContent = netPwVisible ? '🙈' : '👁';
 });
 
-var provPwVisible = false;
-document.getElementById('btn-prov-show-pw').addEventListener('click', function() {
-  provPwVisible = !provPwVisible;
-  document.getElementById('prov-password').type = provPwVisible ? 'text' : 'password';
-  this.textContent = provPwVisible ? '🙈' : '👁';
-});
-
-document.getElementById('btn-prov-connect').addEventListener('click', async function() {
-  var ssid     = document.getElementById('prov-ssid').value.trim();
-  var password = document.getElementById('prov-password').value;
-  var msgEl    = document.getElementById('prov-msg');
-
-  if (!ssid) {
-    msgEl.textContent = 'Your WiFi network name (SSID) is required.';
-    msgEl.style.color = 'var(--err)';
-    return;
-  }
-
-  var btn = this;
-  btn.disabled = true; btn.textContent = 'Connecting…';
-  msgEl.textContent = 'Looking for the board\'s setup hotspot and switching this computer to it…';
-  msgEl.style.color = 'var(--muted)';
-
-  try {
-    var res = await fetch('/api/net/provision', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ssid: ssid, password: password })
-    });
-    var d = await res.json();
-
-    if (d.ok) {
-      msgEl.textContent = 'Connected! Board found "' + (d.board_ssid || 'setup hotspot') + '", sent WiFi credentials, and this computer switched back to its normal network. Rediscovering…';
-      msgEl.style.color = 'var(--ok)';
-      document.getElementById('prov-password').value = '';
-      if (provPwVisible) {
-        provPwVisible = false;
-        document.getElementById('prov-password').type = 'password';
-        document.getElementById('btn-prov-show-pw').textContent = '👁';
-      }
-      setTimeout(function() {
-        var rediscoverBtn = document.getElementById('btn-net-rediscover');
-        if (rediscoverBtn) rediscoverBtn.click();
-      }, 4000);
-    } else {
-      var errMap = {
-        'automatic_wifi_switch_only_supported_on_windows': 'Automatic connect only works when the gateway runs on Windows. Use the manual AP Setup Mode steps below instead.',
-        'no_wifi_interface_found':  'No WiFi adapter found on the gateway machine.',
-        'no_setup_network_found':   'No board setup hotspot (DentalMotion-Setup-...) found nearby. Make sure the board is powered on and its LED is blinking blue.',
-        'failed_to_join_board_network': 'Could not join the board\'s hotspot. Move the gateway machine closer to the board and try again.',
-        'gateway_unreachable':      'Cannot reach gateway. Is it running?'
-      };
-      msgEl.textContent = errMap[d.error] || ('Failed: ' + (d.error || 'unknown error'));
-      msgEl.style.color = 'var(--err)';
-    }
-  } catch (e) {
-    msgEl.textContent = 'Error: ' + e.message;
-    msgEl.style.color = 'var(--err)';
-  } finally {
-    btn.disabled = false; btn.textContent = 'Connect Board';
-  }
-});
 
 document.getElementById('btn-net-apply').addEventListener('click', async function() {
   var ssid     = document.getElementById('net-ssid').value.trim();

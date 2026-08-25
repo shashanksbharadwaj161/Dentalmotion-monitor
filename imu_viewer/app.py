@@ -354,46 +354,6 @@ def net_wifi() -> Response:
     return jsonify({"ok": True, "set_wifi": r1, "reboot": r2})
 
 
-@app.post("/api/net/provision")
-def net_provision() -> Response:
-    """First-time setup for a board that has never been on WiFi before (or
-    needs to move to a new network) — no manual visit to 192.168.4.1
-    required. This machine's WiFi briefly joins the board's own setup
-    hotspot, hands it the credentials, then switches back."""
-    body = request.get_json(silent=True) or {}
-    ssid = str(body.get("ssid") or "").strip()
-    password = str(body.get("password") or "")
-    if not ssid:
-        return jsonify({"ok": False, "error": "ssid_required"}), 400
-    try:
-        # This genuinely takes a while: the gateway machine disconnects its
-        # own WiFi, scans, joins the board's setup hotspot, posts
-        # credentials, then reconnects to its original network.
-        result = _gw_request("POST", "/api/provision", {"ssid": ssid, "password": password}, timeout=45)
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode() if hasattr(exc, "read") else str(exc)
-        try:
-            detail = json.loads(raw)
-        except Exception:
-            detail = {}
-        # Surface the gateway's actual error code (e.g. no_setup_network_found)
-        # instead of a generic one, so the frontend's error map can show the
-        # real reason.
-        return jsonify({"ok": False, "error": detail.get("error") or "provision_failed", "detail": raw}), 502
-    except Exception as exc:
-        return jsonify({"ok": False, "error": "gateway_unreachable", "detail": str(exc)}), 502
-    return jsonify(result)
-
-
-@app.get("/api/net/provision/scan")
-def net_provision_scan() -> Response:
-    try:
-        result = _gw_request("GET", "/api/provision/scan")
-    except Exception as exc:
-        return jsonify({"ok": False, "error": "gateway_unreachable", "detail": str(exc)}), 502
-    return jsonify(result)
-
-
 @app.post("/api/net/rediscover")
 def net_rediscover() -> Response:
     body = request.get_json(silent=True) or {}
