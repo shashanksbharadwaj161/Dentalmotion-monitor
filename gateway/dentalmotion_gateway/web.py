@@ -12,6 +12,7 @@ from . import __version__
 from .config_store import GatewayConfigStore, validate_gateway_id
 from .state import GatewayState
 from .update_manager import GatewayUpdateManager
+from . import wifi_provision
 
 
 ConfigCallback = Callable[[dict[str, Any]], None]
@@ -829,6 +830,31 @@ class GatewayWebServer:
             if self.discovery is not None:
                 self.discovery.send_probe()
             return jsonify({"ok": True})
+
+        @app.get("/api/provision/scan")
+        def provision_scan() -> Any:
+            if not wifi_provision.IS_WINDOWS:
+                return jsonify({"ok": False, "error": "automatic_wifi_switch_only_supported_on_windows", "boards": []})
+            current = wifi_provision.get_current_wifi()
+            interface = current.get("interface") or ""
+            boards = wifi_provision.find_setup_networks(interface) if interface else []
+            return jsonify({"ok": True, "boards": boards, "current_ssid": current.get("ssid", "")})
+
+        @app.post("/api/provision")
+        def provision() -> Any:
+            body = request.get_json(silent=True) or {}
+            ssid = str(body.get("ssid") or "").strip()
+            password = str(body.get("password") or "")
+            board_ssid = str(body.get("board_ssid") or "").strip() or None
+            if not ssid:
+                return jsonify({"ok": False, "error": "ssid_required"}), 400
+            try:
+                result = wifi_provision.provision_board(ssid, password, board_ap_ssid=board_ssid)
+            except wifi_provision.ProvisioningError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 502
+            except Exception as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 500
+            return jsonify(result)
 
         @app.post("/api/devices/<device_uid>/reject")
         def reject(device_uid: str) -> Any:

@@ -2,8 +2,14 @@ DentalMotion Monitor firmware - pre-compiled, ready to flash
 ==============================================================
 
 These 3 files are the compiled firmware (esp32:esp32 core 2.0.9,
-BLE WiFi provisioning). No Arduino IDE / build toolchain needed -
+captive-portal WiFi setup). No Arduino IDE / build toolchain needed -
 just esptool.
+
+Note: a BLE-based WiFi provisioning approach was tried and reverted -
+it crash-looped every single boot into setup mode on this exact chip
+(heap corruption during Bluetooth controller init, verified on real
+hardware). This captive-portal approach is the one actually confirmed
+working end-to-end.
 
 1. Install esptool (one-time):
      pip install esptool
@@ -40,5 +46,7 @@ just esptool.
    Then put it back in download mode (step 3) and repeat step 4.
 
 6. First boot: LED blinks blue (no WiFi saved yet). See the main
-   README.md, Section 6, for how to connect it to WiFi via the
-   "ESP BLE Provisioning" phone app.
+   README.md, Section 6, for how to connect it to WiFi - either from
+   the dashboard's "Connect a New Board" panel (automatic, Windows
+   only), or manually via the board's own setup hotspot
+   (DentalMotion-Setup-<device id>, browse to http://192.168.4.1).
